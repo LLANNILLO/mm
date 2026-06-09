@@ -1,0 +1,7 @@
+---
+services:
+  evently.api:
+    build:
+      target: dev
+    volumes:
+      - .:/app
