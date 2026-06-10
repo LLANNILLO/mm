@@ -23,6 +23,7 @@ overrides:
           type: "time.Time"
 
       - db_type: "timestamptz"
+        nullable: true
         engine: "postgresql"
         go_type:
           type: "time.Time"
@@ -48,3 +49,9 @@ sql:
         sql_package: "pgx/v5"
         emit_interface: false
         emit_json_tags: true
+        overrides:
+          - column: "events.events.status"
+            go_type:
+              import: "github.com/llannillo/mm/modules/events/internal/domain"
+              type: "EventStatus"
+            nullable: false

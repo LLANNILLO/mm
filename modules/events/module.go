@@ -4,22 +4,32 @@ import (
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/llannillo/mm/modules/events/internal/handler"
+	createevent "github.com/llannillo/mm/modules/events/internal/application/commands/create_event"
+	getevent "github.com/llannillo/mm/modules/events/internal/application/queries/get-event"
+	"github.com/llannillo/mm/modules/events/internal/infrastructure/persistence"
+	"github.com/llannillo/mm/modules/events/internal/presentation"
 	"github.com/llannillo/mm/modules/events/internal/store"
 )
 
 type Module struct {
-	db *pgxpool.Pool
+	handler *presentation.Handler
 }
 
 func New(db *pgxpool.Pool) *Module {
+	queries := store.New(db)
+
+	repo := persistence.NewEventRepository(queries)
+	reader := persistence.NewEventReader(queries)
+
 	return &Module{
-		db: db,
+		handler: presentation.NewHandler(
+			createevent.NewHandler(repo),
+			getevent.NewHandler(reader),
+		),
 	}
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	h := handler.New(store.New(m.db))
-	mux.HandleFunc("POST /events", h.Create)
-	mux.HandleFunc("GET /events/{id}", h.Get)
+	mux.HandleFunc("POST /events", m.handler.Create)
+	mux.HandleFunc("GET /events/{id}", m.handler.Get)
 }

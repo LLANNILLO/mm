@@ -8,11 +8,11 @@ CREATE TABLE IF NOT EXISTS events.events (
   description TEXT,
   location TEXT,
   starts_at_utc TIMESTAMPTZ NOT NULL,
-  ends_at_utc TIMESTAMPTZ NOT NULL,
+  ends_at_utc TIMESTAMPTZ,
   status VARCHAR(50) NOT NULL DEFAULT 'draft',
 
   -- Optional: ensure ends_at is after starts_at
-  CONSTRAINT chk_dates CHECK (ends_at_utc > starts_at_utc),
+  CONSTRAINT chk_dates CHECK (ends_at_utc IS NULL OR ends_at_utc > starts_at_utc),
 
   -- Optional: restrict status to known values
   CONSTRAINT chk_status CHECK (status IN ('draft', 'published', 'cancelled', 'completed'))
