@@ -11,12 +11,28 @@ import (
 	"github.com/llannillo/mm/modules/events/internal/domain"
 )
 
+type EventsCategory struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	IsArchived bool      `json:"is_archived"`
+}
+
 type EventsEvent struct {
 	ID          uuid.UUID          `json:"id"`
 	Title       string             `json:"title"`
 	Description *string            `json:"description"`
 	Location    *string            `json:"location"`
 	StartsAtUtc time.Time          `json:"starts_at_utc"`
-	EndsAtUtc   time.Time          `json:"ends_at_utc"`
+	EndsAtUtc   *time.Time         `json:"ends_at_utc"`
 	Status      domain.EventStatus `json:"status"`
+	CategoryID  uuid.UUID          `json:"category_id"`
+}
+
+type EventsTicketType struct {
+	ID       uuid.UUID `json:"id"`
+	EventID  uuid.UUID `json:"event_id"`
+	Name     string    `json:"name"`
+	Price    int64     `json:"price"`
+	Currency string    `json:"currency"`
+	Quantity int64     `json:"quantity"`
 }

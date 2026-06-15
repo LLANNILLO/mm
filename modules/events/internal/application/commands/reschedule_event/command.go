@@ -1,4 +1,4 @@
-package createevent
+package rescheduleevent
 
 import (
 	"time"
@@ -7,10 +7,7 @@ import (
 )
 
 type Command struct {
-	CategoryID  uuid.UUID
-	Title       string
-	Description *string
-	Location    *string
+	EventID     uuid.UUID
 	StartsAtUtc time.Time
 	EndsAtUtc   *time.Time
 }

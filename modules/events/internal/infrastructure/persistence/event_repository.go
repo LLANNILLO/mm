@@ -2,11 +2,13 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/llannillo/mm/modules/events/internal/domain"
-	"github.com/llannillo/mm/modules/events/internal/store"
+	store "github.com/llannillo/mm/modules/events/internal/infrastructure/store/generated"
 )
 
 type EventRepository struct {
@@ -18,21 +20,60 @@ func NewEventRepository(q *store.Queries) *EventRepository {
 }
 
 func (r *EventRepository) Insert(ctx context.Context, event *domain.Event) error {
-	endsAt := time.Time{}
-	if event.EndsAtUtc != nil {
-		endsAt = *event.EndsAtUtc
-	}
-	_, err := r.queries.CreateEvent(ctx, store.CreateEventParams{
+	_, err := r.queries.InsertEvent(ctx, store.InsertEventParams{
 		ID:          event.ID,
+		CategoryID:  event.CategoryID,
 		Title:       event.Title,
 		Description: event.Description,
 		Location:    event.Location,
 		StartsAtUtc: event.StartsAtUtc,
-		EndsAtUtc:   endsAt,
+		EndsAtUtc:   event.EndsAtUtc,
 		Status:      event.Status,
 	})
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
 	}
 	return nil
+}
+
+func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Event, error) {
+	row, err := r.queries.SelectEventForUpdate(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrEventNotFound
+		}
+		return nil, fmt.Errorf("get event by id: %w", err)
+	}
+	return rehydrateEvent(row), nil
+}
+
+func (r *EventRepository) Update(ctx context.Context, event *domain.Event) error {
+	for _, e := range event.DomainEvents() {
+		switch e.(type) {
+		case domain.EventCancelledDomainEvent:
+			return r.queries.UCancelEvent(ctx, event.ID)
+		case domain.EventPublishedDomainEvent:
+			return r.queries.UPublishEvent(ctx, event.ID)
+		case domain.EventRescheduledDomainEvent:
+			return r.queries.URescheduleEvent(ctx, store.URescheduleEventParams{
+				ID:         event.ID,
+				StartsDate: event.StartsAtUtc,
+				EndsDate:   event.EndsAtUtc,
+			})
+		}
+	}
+	return nil
+}
+
+func rehydrateEvent(row store.SelectEventForUpdateRow) *domain.Event {
+	return &domain.Event{
+		ID:          row.ID,
+		CategoryID:  row.CategoryID,
+		Title:       row.Title,
+		Description: row.Description,
+		Location:    row.Location,
+		StartsAtUtc: row.StartsAtUtc,
+		EndsAtUtc:   row.EndsAtUtc,
+		Status:      row.Status,
+	}
 }
