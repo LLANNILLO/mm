@@ -1,2 +1,3 @@
-./tmp/
-./.atl/
+tmp/
+.atl/
+**/generated/
