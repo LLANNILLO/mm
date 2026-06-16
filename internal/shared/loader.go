@@ -14,6 +14,7 @@ func LoadConfig(env string, modules []string) (*Config, error) {
 	v := viper.New()
 	v.BindEnv("database.dsn", "DATABASE_URL")        //nolint:errcheck
 	v.BindEnv("logging.seq.endpoint", "SEQ_ENDPOINT") //nolint:errcheck
+	v.BindEnv("cache.address", "VALKEY_URL")           //nolint:errcheck
 
 	if err := readInto(v, configsDir, "app"); err != nil {
 		return nil, fmt.Errorf("app config: %w", err)

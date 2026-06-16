@@ -8,8 +8,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/llannillo/mm/internal/shared"
+	"github.com/llannillo/mm/internal/shared/cache"
+	"github.com/llannillo/mm/internal/shared/health"
 	"github.com/llannillo/mm/internal/shared/middleware"
 	"github.com/llannillo/mm/modules/events"
+	"github.com/valkey-io/valkey-go"
 )
 
 func main() {
@@ -38,9 +41,32 @@ func main() {
 	}
 	defer db.Close()
 
-	app := shared.App{Config: cfg, DB: db, Logger: logger}
+	var cacheService cache.Service
+	var valkeyClient valkey.Client
+	if cfg.Cache.Address != "" {
+		valkeyClient, err = valkey.NewClient(valkey.ClientOption{
+			InitAddress: []string{cfg.Cache.Address},
+		})
+		if err != nil {
+			logger.Error("failed to connect to Valkey", "error", err)
+			log.Fatal(err)
+		}
+		defer valkeyClient.Close()
+		cacheService = cache.NewService(valkeyClient)
+		logger.Info("connected to Valkey", "address", cfg.Cache.Address)
+	}
+
+	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService}
+
+	checkers := map[string]health.Checker{
+		"postgres": health.NewPostgresChecker(db),
+	}
+	if valkeyClient != nil {
+		checkers["valkey"] = health.NewValkeyChecker(valkeyClient)
+	}
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /health", health.NewHandler(checkers))
 	events.New(app).RegisterRoutes(mux)
 
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
