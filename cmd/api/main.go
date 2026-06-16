@@ -12,7 +12,17 @@ import (
 )
 
 func main() {
-	poolCfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	env := os.Getenv("APP_ENV")
+	if env == "" {
+		env = "development"
+	}
+
+	cfg, err := shared.LoadConfig(env, []string{"events"})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	poolCfg, err := pgxpool.ParseConfig(cfg.Database.DSN)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -23,10 +33,9 @@ func main() {
 	}
 	defer db.Close()
 
+	app := shared.App{Config: cfg, DB: db}
+
 	mux := http.NewServeMux()
-
-	app := shared.App{DB: db}
-
 	events.New(app).RegisterRoutes(mux)
 
 	log.Println("listening on :8080")
