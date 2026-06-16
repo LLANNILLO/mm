@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/modules/events"
 )
 
@@ -24,7 +25,9 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	events.New(db).RegisterRoutes(mux)
+	app := shared.App{DB: db}
+
+	events.New(app).RegisterRoutes(mux)
 
 	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))

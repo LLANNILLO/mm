@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	archivecategory "github.com/llannillo/mm/modules/events/internal/app/commands/archive_category"
 	cancelevent "github.com/llannillo/mm/modules/events/internal/app/commands/cancel_event"
 	createcategory "github.com/llannillo/mm/modules/events/internal/app/commands/create_category"
@@ -26,14 +25,15 @@ import (
 	pgstore "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
 	"github.com/llannillo/mm/modules/events/internal/domain"
+	"github.com/llannillo/mm/internal/shared"
 )
 
 type Module struct {
 	handler *httphandler.Handler
 }
 
-func New(db *pgxpool.Pool) *Module {
-	queries := pgstore.New(db)
+func New(app shared.App) *Module {
+	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
 	eventRepo := pg.NewEventRepository(queries)
