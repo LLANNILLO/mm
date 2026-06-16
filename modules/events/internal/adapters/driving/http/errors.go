@@ -4,23 +4,31 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/llannillo/mm/internal/shared/problem"
+	"github.com/llannillo/mm/internal/shared/validation"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 )
 
 func handleDomainError(w http.ResponseWriter, err error) {
-	var de *domain.DomainError
-	if errors.As(err, &de) {
-		switch de.Kind {
-		case domain.KindValidation:
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": de.Message, "code": de.Code})
-			return
-		case domain.KindNotFound:
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": de.Message, "code": de.Code})
-			return
-		case domain.KindConflict:
-			writeJSON(w, http.StatusConflict, map[string]string{"error": de.Message, "code": de.Code})
-			return
-		}
+	var ve *validation.ValidationErrors
+	if errors.As(err, &ve) {
+		problem.Write(w, problem.Detail{
+			Title:  "Validation failure",
+			Status: http.StatusBadRequest,
+			Detail: "One or more validation errors occurred.",
+			Errors: ve.Failures,
+		})
+		return
 	}
-	writeError(w, http.StatusInternalServerError, "internal server error")
+
+	var de *domain.DomainError
+	if !errors.As(err, &de) {
+		problem.WriteInternal(w)
+		return
+	}
+	problem.Write(w, problem.Detail{
+		Title:  de.Code,
+		Status: de.StatusCode(),
+		Detail: de.Message,
+	})
 }

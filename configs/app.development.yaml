@@ -1,0 +1,4 @@
+logging:
+  level: debug
+  seq:
+    endpoint: "http://localhost:5341"

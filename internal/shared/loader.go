@@ -12,12 +12,14 @@ func LoadConfig(env string, modules []string) (*Config, error) {
 	const configsDir = "configs"
 
 	v := viper.New()
-	// DATABASE_URL env var overrides database.dsn — keeps docker-compose working as-is
-	v.BindEnv("database.dsn", "DATABASE_URL") //nolint:errcheck
+	v.BindEnv("database.dsn", "DATABASE_URL")        //nolint:errcheck
+	v.BindEnv("logging.seq.endpoint", "SEQ_ENDPOINT") //nolint:errcheck
 
 	if err := readInto(v, configsDir, "app"); err != nil {
 		return nil, fmt.Errorf("app config: %w", err)
 	}
+	// optional per-environment app override (e.g. app.development.yaml)
+	_ = mergeInto(v, configsDir, fmt.Sprintf("app.%s", env))
 
 	for _, module := range modules {
 		if err := mergeInto(v, configsDir, fmt.Sprintf("modules.%s", module)); err != nil {

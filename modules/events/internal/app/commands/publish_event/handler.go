@@ -18,6 +18,9 @@ func NewHandler(repo outbound.EventRepository, ticketTypeRepo outbound.TicketTyp
 }
 
 func (h *Handler) Handle(ctx context.Context, cmd Command) error {
+	if err := cmd.Validate(); err != nil {
+		return err
+	}
 	event, err := h.repo.GetByID(ctx, cmd.EventID)
 	if err != nil {
 		return err
