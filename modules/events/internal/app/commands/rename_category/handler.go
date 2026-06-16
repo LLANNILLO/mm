@@ -16,6 +16,9 @@ func NewHandler(repo outbound.CategoryRepository) *Handler {
 }
 
 func (h *Handler) Handle(ctx context.Context, cmd Command) error {
+	if err := cmd.Validate(); err != nil {
+		return err
+	}
 	category, err := h.repo.GetByID(ctx, cmd.CategoryID)
 	if err != nil {
 		return err

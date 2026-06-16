@@ -1,0 +1,7 @@
+logging:
+  level: debug
+  seq:
+    endpoint: "http://localhost:5341"
+
+cache:
+  address: "evently.valkey:6379"

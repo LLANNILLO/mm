@@ -5,3 +5,8 @@ services:
       target: dev
     volumes:
       - .:/app
+
+  evently.seq:
+    environment:
+      SEQ_FIRSTRUN_ADMINUSERNAME: "seq_admin"
+      SEQ_FIRSTRUN_ADMINPASSWORD: "123456"

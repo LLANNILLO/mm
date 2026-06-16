@@ -1,0 +1,10 @@
+database:
+  dsn: ""
+
+logging:
+  level: info
+  seq:
+    endpoint: ""
+
+cache:
+  address: ""

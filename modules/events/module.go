@@ -2,10 +2,10 @@ package events
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	archivecategory "github.com/llannillo/mm/modules/events/internal/app/commands/archive_category"
 	cancelevent "github.com/llannillo/mm/modules/events/internal/app/commands/cancel_event"
 	createcategory "github.com/llannillo/mm/modules/events/internal/app/commands/create_category"
@@ -26,14 +26,17 @@ import (
 	pgstore "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
 	"github.com/llannillo/mm/modules/events/internal/domain"
+	"github.com/llannillo/mm/internal/shared"
 )
+
+const moduleName = "events"
 
 type Module struct {
 	handler *httphandler.Handler
 }
 
-func New(db *pgxpool.Pool) *Module {
-	queries := pgstore.New(db)
+func New(app shared.App) *Module {
+	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
 	eventRepo := pg.NewEventRepository(queries)
@@ -45,6 +48,7 @@ func New(db *pgxpool.Pool) *Module {
 	ticketTypeReader := pg.NewTicketTypeReader(queries)
 
 	events := &eventService{
+		log:             app.Logger,
 		createEvent:     createevent.NewHandler(eventRepo, clock),
 		publishEvent:    publishevent.NewHandler(eventRepo, ticketTypeRepo),
 		cancelEvent:     cancelevent.NewHandler(eventRepo, clock),
@@ -55,6 +59,7 @@ func New(db *pgxpool.Pool) *Module {
 	}
 
 	categories := &categoryService{
+		log:             app.Logger,
 		createCategory:  createcategory.NewHandler(categoryRepo),
 		archiveCategory: archivecategory.NewHandler(categoryRepo),
 		renameCategory:  renamecategory.NewHandler(categoryRepo),
@@ -63,6 +68,7 @@ func New(db *pgxpool.Pool) *Module {
 	}
 
 	tickets := &ticketService{
+		log:               app.Logger,
 		createTicketType:  createtickettype.NewHandler(ticketTypeRepo),
 		updateTicketPrice: updateticketprice.NewHandler(ticketTypeRepo),
 		getTicketType:     gettickettype.NewHandler(ticketTypeReader),
@@ -78,9 +84,22 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	m.handler.RegisterRoutes(mux)
 }
 
-// -- service facades --
+// logHandler logs the start of a request and returns a func to call on completion.
+func logHandler(log *slog.Logger, ctx context.Context, name string) func(error) {
+	log.InfoContext(ctx, "Processing request", "module", moduleName, "request", name)
+	return func(err error) {
+		if err != nil {
+			log.ErrorContext(ctx, "Completed request with error", "module", moduleName, "request", name, "error", err)
+			return
+		}
+		log.InfoContext(ctx, "Completed request", "module", moduleName, "request", name)
+	}
+}
+
+// -- event service --
 
 type eventService struct {
+	log             *slog.Logger
 	createEvent     *createevent.Handler
 	publishEvent    *publishevent.Handler
 	cancelEvent     *cancelevent.Handler
@@ -91,34 +110,58 @@ type eventService struct {
 }
 
 func (s *eventService) CreateEvent(ctx context.Context, cmd createevent.Command) (uuid.UUID, error) {
-	return s.createEvent.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "CreateEvent")
+	result, err := s.createEvent.Handle(ctx, cmd)
+	done(err)
+	return result, err
 }
 
 func (s *eventService) PublishEvent(ctx context.Context, cmd publishevent.Command) error {
-	return s.publishEvent.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "PublishEvent")
+	err := s.publishEvent.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *eventService) CancelEvent(ctx context.Context, cmd cancelevent.Command) error {
-	return s.cancelEvent.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "CancelEvent")
+	err := s.cancelEvent.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *eventService) RescheduleEvent(ctx context.Context, cmd rescheduleevent.Command) error {
-	return s.rescheduleEvent.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "RescheduleEvent")
+	err := s.rescheduleEvent.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *eventService) GetEvent(ctx context.Context, q getevent.Query) (*getevent.Response, error) {
-	return s.getEvent.Handle(ctx, q)
+	done := logHandler(s.log, ctx, "GetEvent")
+	result, err := s.getEvent.Handle(ctx, q)
+	done(err)
+	return result, err
 }
 
 func (s *eventService) ListEvents(ctx context.Context) ([]listevents.EventItem, error) {
-	return s.listEvents.Handle(ctx)
+	done := logHandler(s.log, ctx, "ListEvents")
+	result, err := s.listEvents.Handle(ctx)
+	done(err)
+	return result, err
 }
 
 func (s *eventService) SearchEvents(ctx context.Context, q searchevents.Query) (*searchevents.Page[searchevents.EventItem], error) {
-	return s.searchEvents.Handle(ctx, q)
+	done := logHandler(s.log, ctx, "SearchEvents")
+	result, err := s.searchEvents.Handle(ctx, q)
+	done(err)
+	return result, err
 }
 
+// -- category service --
+
 type categoryService struct {
+	log             *slog.Logger
 	createCategory  *createcategory.Handler
 	archiveCategory *archivecategory.Handler
 	renameCategory  *renamecategory.Handler
@@ -127,26 +170,44 @@ type categoryService struct {
 }
 
 func (s *categoryService) CreateCategory(ctx context.Context, cmd createcategory.Command) (uuid.UUID, error) {
-	return s.createCategory.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "CreateCategory")
+	result, err := s.createCategory.Handle(ctx, cmd)
+	done(err)
+	return result, err
 }
 
 func (s *categoryService) ArchiveCategory(ctx context.Context, cmd archivecategory.Command) error {
-	return s.archiveCategory.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "ArchiveCategory")
+	err := s.archiveCategory.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *categoryService) RenameCategory(ctx context.Context, cmd renamecategory.Command) error {
-	return s.renameCategory.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "RenameCategory")
+	err := s.renameCategory.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *categoryService) GetCategory(ctx context.Context, q getcategory.Query) (*getcategory.Response, error) {
-	return s.getCategory.Handle(ctx, q)
+	done := logHandler(s.log, ctx, "GetCategory")
+	result, err := s.getCategory.Handle(ctx, q)
+	done(err)
+	return result, err
 }
 
 func (s *categoryService) ListCategories(ctx context.Context) ([]listcategories.CategoryItem, error) {
-	return s.listCategories.Handle(ctx)
+	done := logHandler(s.log, ctx, "ListCategories")
+	result, err := s.listCategories.Handle(ctx)
+	done(err)
+	return result, err
 }
 
+// -- ticket service --
+
 type ticketService struct {
+	log               *slog.Logger
 	createTicketType  *createtickettype.Handler
 	updateTicketPrice *updateticketprice.Handler
 	getTicketType     *gettickettype.Handler
@@ -154,17 +215,29 @@ type ticketService struct {
 }
 
 func (s *ticketService) CreateTicketType(ctx context.Context, cmd createtickettype.Command) (uuid.UUID, error) {
-	return s.createTicketType.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "CreateTicketType")
+	result, err := s.createTicketType.Handle(ctx, cmd)
+	done(err)
+	return result, err
 }
 
 func (s *ticketService) UpdateTicketPrice(ctx context.Context, cmd updateticketprice.Command) error {
-	return s.updateTicketPrice.Handle(ctx, cmd)
+	done := logHandler(s.log, ctx, "UpdateTicketPrice")
+	err := s.updateTicketPrice.Handle(ctx, cmd)
+	done(err)
+	return err
 }
 
 func (s *ticketService) GetTicketType(ctx context.Context, q gettickettype.Query) (*gettickettype.Response, error) {
-	return s.getTicketType.Handle(ctx, q)
+	done := logHandler(s.log, ctx, "GetTicketType")
+	result, err := s.getTicketType.Handle(ctx, q)
+	done(err)
+	return result, err
 }
 
 func (s *ticketService) ListTicketTypes(ctx context.Context, q listtickettype.Query) ([]listtickettype.TicketTypeItem, error) {
-	return s.listTicketTypes.Handle(ctx, q)
+	done := logHandler(s.log, ctx, "ListTicketTypes")
+	result, err := s.listTicketTypes.Handle(ctx, q)
+	done(err)
+	return result, err
 }

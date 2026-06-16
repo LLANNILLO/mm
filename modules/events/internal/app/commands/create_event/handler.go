@@ -19,6 +19,9 @@ func NewHandler(repo outbound.EventRepository, clock domain.Clock) *Handler {
 }
 
 func (h *Handler) Handle(ctx context.Context, cmd Command) (uuid.UUID, error) {
+	if err := cmd.Validate(); err != nil {
+		return uuid.Nil, err
+	}
 	event, err := domain.NewEvent(
 		cmd.CategoryID,
 		cmd.Title,
