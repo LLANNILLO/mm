@@ -71,10 +71,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", health.NewHandler(checkers))
 	eventsModule := events.New(app)
-	usersModule := users.New(app)
+	ticketingModule := ticketing.New(app, eventsModule)
+	usersModule := users.New(app, ticketingModule)
 	eventsModule.RegisterRoutes(mux)
+	ticketingModule.RegisterRoutes(mux)
 	usersModule.RegisterRoutes(mux)
-	ticketing.New(app, eventsModule, usersModule).RegisterRoutes(mux)
 
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
 

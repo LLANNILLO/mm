@@ -19,6 +19,7 @@ import (
 	"github.com/llannillo/mm/modules/users/internal/domain"
 	"github.com/llannillo/mm/modules/users/internal/ports/inbound"
 	usersapi "github.com/llannillo/mm/modules/users/api"
+	ticketingapi "github.com/llannillo/mm/modules/ticketing/api"
 )
 
 const moduleName = "users"
@@ -28,16 +29,16 @@ type Module struct {
 	getUserQuery  *getuser.Handler
 }
 
-func New(app shared.App) *Module {
+func New(app shared.App, ticketingAPI ticketingapi.TicketingAPI) *Module {
 	queries := pgstore.New(app.DB)
-
-	sharedevents.Register(app.Dispatcher, eventhandlers.HandleUserRegistered)
-	sharedevents.Register(app.Dispatcher, eventhandlers.HandleUserProfileUpdated)
 
 	userRepo := pg.NewUserRepository(queries, app.Dispatcher)
 	userReader := pg.NewUserReader(queries)
 
 	getUserHandler := getuser.NewHandler(userReader)
+
+	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserRegisteredHandler(getUserHandler, ticketingAPI).Handle)
+	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserProfileUpdatedHandler(ticketingAPI).Handle)
 
 	users := &userService{
 		log:          app.Logger,

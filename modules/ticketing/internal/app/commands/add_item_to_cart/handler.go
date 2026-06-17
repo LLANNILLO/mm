@@ -5,22 +5,22 @@ import (
 	"fmt"
 
 	eventsapi "github.com/llannillo/mm/modules/events/api"
-	usersapi "github.com/llannillo/mm/modules/users/api"
 	"github.com/llannillo/mm/modules/ticketing/internal/app"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
+	"github.com/llannillo/mm/modules/ticketing/internal/ports/outbound"
 )
 
 type Handler struct {
-	cartService *app.CartService
-	eventsAPI   eventsapi.EventsAPI
-	usersAPI    usersapi.UsersAPI
+	cartService  *app.CartService
+	customerRepo outbound.CustomerRepository
+	eventsAPI    eventsapi.EventsAPI
 }
 
-func NewHandler(cartService *app.CartService, eventsAPI eventsapi.EventsAPI, usersAPI usersapi.UsersAPI) *Handler {
+func NewHandler(cartService *app.CartService, customerRepo outbound.CustomerRepository, eventsAPI eventsapi.EventsAPI) *Handler {
 	return &Handler{
-		cartService: cartService,
-		eventsAPI:   eventsAPI,
-		usersAPI:    usersAPI,
+		cartService:  cartService,
+		customerRepo: customerRepo,
+		eventsAPI:    eventsAPI,
 	}
 }
 
@@ -29,12 +29,9 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) error {
 		return err
 	}
 
-	customer, err := h.usersAPI.GetUser(ctx, cmd.CustomerID)
+	_, err := h.customerRepo.GetByID(ctx, cmd.CustomerID)
 	if err != nil {
 		return fmt.Errorf("get customer: %w", err)
-	}
-	if customer == nil {
-		return domain.ErrCustomerNotFound
 	}
 
 	ticketType, err := h.eventsAPI.GetTicketType(ctx, cmd.TicketTypeID)
