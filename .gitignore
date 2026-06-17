@@ -1,3 +1,5 @@
 tmp/
 .atl/
 **/generated/
+.env
+.claude/settings.local.json

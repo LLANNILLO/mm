@@ -6,10 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type DomainEvent interface {
-	domainEvent()
-}
-
 // Event domain events
 
 type EventCreatedDomainEvent struct{ EventID uuid.UUID }
@@ -21,10 +17,10 @@ type EventRescheduledDomainEvent struct {
 	EndsAtUtc   *time.Time
 }
 
-func (EventCreatedDomainEvent) domainEvent()     {}
-func (EventPublishedDomainEvent) domainEvent()   {}
-func (EventCancelledDomainEvent) domainEvent()   {}
-func (EventRescheduledDomainEvent) domainEvent() {}
+func (EventCreatedDomainEvent) IsDomainEvent()     {}
+func (EventPublishedDomainEvent) IsDomainEvent()   {}
+func (EventCancelledDomainEvent) IsDomainEvent()   {}
+func (EventRescheduledDomainEvent) IsDomainEvent() {}
 
 // Category domain events
 
@@ -35,9 +31,9 @@ type CategoryNameChangedDomainEvent struct {
 	Name       string
 }
 
-func (CategoryCreatedDomainEvent) domainEvent()     {}
-func (CategoryArchivedDomainEvent) domainEvent()    {}
-func (CategoryNameChangedDomainEvent) domainEvent() {}
+func (CategoryCreatedDomainEvent) IsDomainEvent()     {}
+func (CategoryArchivedDomainEvent) IsDomainEvent()    {}
+func (CategoryNameChangedDomainEvent) IsDomainEvent() {}
 
 // TicketType domain events
 
@@ -47,5 +43,5 @@ type TicketTypePriceChangedDomainEvent struct {
 	Price        int64
 }
 
-func (TicketTypeCreatedDomainEvent) domainEvent()      {}
-func (TicketTypePriceChangedDomainEvent) domainEvent() {}
+func (TicketTypeCreatedDomainEvent) IsDomainEvent()      {}
+func (TicketTypePriceChangedDomainEvent) IsDomainEvent() {}

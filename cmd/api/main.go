@@ -9,9 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/cache"
+	sharedevents "github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/internal/shared/health"
 	"github.com/llannillo/mm/internal/shared/middleware"
 	"github.com/llannillo/mm/modules/events"
+	"github.com/llannillo/mm/modules/users"
 	"github.com/valkey-io/valkey-go"
 )
 
@@ -21,7 +23,7 @@ func main() {
 		env = "development"
 	}
 
-	cfg, err := shared.LoadConfig(env, []string{"events"})
+	cfg, err := shared.LoadConfig(env, []string{"events", "users"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -56,7 +58,7 @@ func main() {
 		logger.Info("connected to Valkey", "address", cfg.Cache.Address)
 	}
 
-	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService}
+	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService, Dispatcher: sharedevents.NewDispatcher()}
 
 	checkers := map[string]health.Checker{
 		"postgres": health.NewPostgresChecker(db),
@@ -68,6 +70,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", health.NewHandler(checkers))
 	events.New(app).RegisterRoutes(mux)
+	users.New(app).RegisterRoutes(mux)
 
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
 

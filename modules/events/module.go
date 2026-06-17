@@ -15,6 +15,7 @@ import (
 	renamecategory "github.com/llannillo/mm/modules/events/internal/app/commands/rename_category"
 	rescheduleevent "github.com/llannillo/mm/modules/events/internal/app/commands/reschedule_event"
 	updateticketprice "github.com/llannillo/mm/modules/events/internal/app/commands/update_ticket_price"
+	eventhandlers "github.com/llannillo/mm/modules/events/internal/app/event_handlers"
 	getcategory "github.com/llannillo/mm/modules/events/internal/app/queries/get_category"
 	getevent "github.com/llannillo/mm/modules/events/internal/app/queries/get_event"
 	gettickettype "github.com/llannillo/mm/modules/events/internal/app/queries/get_ticket_type"
@@ -27,6 +28,7 @@ import (
 	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 	"github.com/llannillo/mm/internal/shared"
+	sharedevents "github.com/llannillo/mm/internal/shared/events"
 )
 
 const moduleName = "events"
@@ -39,9 +41,11 @@ func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
-	eventRepo := pg.NewEventRepository(queries)
-	categoryRepo := pg.NewCategoryRepository(queries)
-	ticketTypeRepo := pg.NewTicketTypeRepository(queries)
+	sharedevents.Register(app.Dispatcher, eventhandlers.HandleEventRescheduled)
+
+	eventRepo := pg.NewEventRepository(queries, app.Dispatcher)
+	categoryRepo := pg.NewCategoryRepository(queries, app.Dispatcher)
+	ticketTypeRepo := pg.NewTicketTypeRepository(queries, app.Dispatcher)
 
 	eventReader := pg.NewEventReader(queries)
 	categoryReader := pg.NewCategoryReader(queries)

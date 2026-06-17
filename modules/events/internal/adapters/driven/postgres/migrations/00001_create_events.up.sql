@@ -18,8 +18,8 @@ CREATE TABLE IF NOT EXISTS events.events (
   CONSTRAINT chk_status CHECK (status IN ('draft', 'published', 'cancelled', 'completed'))
 );
 
-CREATE INDEX idx_events_status ON events.events (status);
-CREATE INDEX idx_events_starts_at ON events.events (starts_at_utc);
+CREATE INDEX IF NOT EXISTS idx_events_status ON events.events (status);
+CREATE INDEX IF NOT EXISTS idx_events_starts_at ON events.events (starts_at_utc);
 -- +goose StatementEnd
 
 -- +goose Down

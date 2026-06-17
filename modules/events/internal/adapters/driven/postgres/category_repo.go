@@ -7,16 +7,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 )
 
 type CategoryRepository struct {
-	queries *store.Queries
+	queries    *store.Queries
+	dispatcher *events.Dispatcher
 }
 
-func NewCategoryRepository(q *store.Queries) *CategoryRepository {
-	return &CategoryRepository{queries: q}
+func NewCategoryRepository(q *store.Queries, d *events.Dispatcher) *CategoryRepository {
+	return &CategoryRepository{queries: q, dispatcher: d}
 }
 
 func (r *CategoryRepository) Insert(ctx context.Context, category *domain.Category) error {
@@ -27,7 +29,9 @@ func (r *CategoryRepository) Insert(ctx context.Context, category *domain.Catego
 	if err != nil {
 		return fmt.Errorf("insert category: %w", err)
 	}
-	return nil
+	domainEvents := category.DomainEvents()
+	category.ClearDomainEvents()
+	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
 
 func (r *CategoryRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Category, error) {
@@ -47,15 +51,21 @@ func (r *CategoryRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 
 func (r *CategoryRepository) Update(ctx context.Context, c *domain.Category) error {
 	for _, e := range c.DomainEvents() {
+		var err error
 		switch e.(type) {
 		case domain.CategoryArchivedDomainEvent:
-			return r.queries.UpdateCategoryArchived(ctx, c.ID)
+			err = r.queries.UpdateCategoryArchived(ctx, c.ID)
 		case domain.CategoryNameChangedDomainEvent:
-			return r.queries.UpdateCategoryName(ctx, store.UpdateCategoryNameParams{
+			err = r.queries.UpdateCategoryName(ctx, store.UpdateCategoryNameParams{
 				ID:   c.ID,
 				Name: c.Name,
 			})
 		}
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	domainEvents := c.DomainEvents()
+	c.ClearDomainEvents()
+	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
