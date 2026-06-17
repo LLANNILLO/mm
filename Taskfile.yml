@@ -6,10 +6,13 @@ vars:
   DB_URL: '{{.DATABASE_URL | default "postgres://postgres:postgres@localhost:5432/evently?sslmode=disable"}}'
   EVENTS_MIGRATIONS: modules/events/internal/adapters/driven/postgres/migrations
   USERS_MIGRATIONS: modules/users/internal/adapters/driven/postgres/migrations
+  TICKETING_MIGRATIONS: modules/ticketing/internal/adapters/driven/postgres/migrations
   EVENTS_SQLC: modules/events/internal/adapters/driven/postgres
   USERS_SQLC: modules/users/internal/adapters/driven/postgres
+  TICKETING_SQLC: modules/ticketing/internal/adapters/driven/postgres
   EVENTS_TABLE: goose_db_events_versions
   USERS_TABLE: goose_db_users_versions
+  TICKETING_TABLE: goose_db_ticketing_versions
 
 tasks:
   # ── Migrations ──────────────────────────────────────────────────────────────
@@ -19,6 +22,7 @@ tasks:
     cmds:
       - task: migrate:events
       - task: migrate:users
+      - task: migrate:ticketing
 
   migrate:events:
     desc: Run events module migrations (up)
@@ -28,9 +32,14 @@ tasks:
     desc: Run users module migrations (up)
     cmd: goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" up
 
+  migrate:ticketing:
+    desc: Run ticketing module migrations (up)
+    cmd: goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" up
+
   migrate:down:
     desc: Rollback all module migrations (down, reverse order)
     cmds:
+      - task: migrate:down:ticketing
       - task: migrate:down:users
       - task: migrate:down:events
 
@@ -42,6 +51,10 @@ tasks:
     desc: Rollback users module migrations (down)
     cmd: goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" down
 
+  migrate:down:ticketing:
+    desc: Rollback ticketing module migrations (down)
+    cmd: goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" down
+
   migrate:status:
     desc: Show migration status for all modules
     cmds:
@@ -49,10 +62,12 @@ tasks:
       - goose -dir {{.EVENTS_MIGRATIONS}} -table {{.EVENTS_TABLE}} postgres "{{.DB_URL}}" status
       - echo "=== users ==="
       - goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" status
+      - echo "=== ticketing ==="
+      - goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" status
 
   db:reset:
     desc: Drop all module schemas and version tables — DEV ONLY
-    cmd: psql "{{.DB_URL}}" -c "DROP SCHEMA IF EXISTS events CASCADE; DROP SCHEMA IF EXISTS users CASCADE; DROP TABLE IF EXISTS events_versions; DROP TABLE IF EXISTS users_versions; DROP TABLE IF EXISTS goose_db_version;"
+    cmd: psql "{{.DB_URL}}" -c "DROP SCHEMA IF EXISTS events CASCADE; DROP SCHEMA IF EXISTS users CASCADE; DROP SCHEMA IF EXISTS ticketing CASCADE; DROP TABLE IF EXISTS goose_db_events_versions; DROP TABLE IF EXISTS goose_db_users_versions; DROP TABLE IF EXISTS goose_db_ticketing_versions; DROP TABLE IF EXISTS goose_db_version;"
 
   # ── SQLC ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +76,7 @@ tasks:
     cmds:
       - task: sqlc:events
       - task: sqlc:users
+      - task: sqlc:ticketing
 
   sqlc:events:
     desc: Regenerate SQLC code for events module
@@ -70,6 +86,11 @@ tasks:
   sqlc:users:
     desc: Regenerate SQLC code for users module
     dir: "{{.USERS_SQLC}}"
+    cmd: sqlc generate
+
+  sqlc:ticketing:
+    desc: Regenerate SQLC code for ticketing module
+    dir: "{{.TICKETING_SQLC}}"
     cmd: sqlc generate
 
   # ── Build / Dev ─────────────────────────────────────────────────────────────

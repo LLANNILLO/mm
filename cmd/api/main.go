@@ -13,6 +13,7 @@ import (
 	"github.com/llannillo/mm/internal/shared/health"
 	"github.com/llannillo/mm/internal/shared/middleware"
 	"github.com/llannillo/mm/modules/events"
+	"github.com/llannillo/mm/modules/ticketing"
 	"github.com/llannillo/mm/modules/users"
 	"github.com/valkey-io/valkey-go"
 )
@@ -23,7 +24,7 @@ func main() {
 		env = "development"
 	}
 
-	cfg, err := shared.LoadConfig(env, []string{"events", "users"})
+	cfg, err := shared.LoadConfig(env, []string{"events", "users", "ticketing"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -71,6 +72,7 @@ func main() {
 	mux.Handle("GET /health", health.NewHandler(checkers))
 	events.New(app).RegisterRoutes(mux)
 	users.New(app).RegisterRoutes(mux)
+	ticketing.New(app).RegisterRoutes(mux)
 
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
 
