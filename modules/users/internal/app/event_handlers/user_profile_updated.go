@@ -3,18 +3,23 @@ package eventhandlers
 import (
 	"context"
 
+	"github.com/llannillo/mm/internal/shared/eventbus"
 	"github.com/llannillo/mm/modules/users/internal/domain"
-	ticketingapi "github.com/llannillo/mm/modules/ticketing/api"
+	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
 type UserProfileUpdatedHandler struct {
-	ticketingAPI ticketingapi.TicketingAPI
+	eventBus eventbus.EventBus
 }
 
-func NewUserProfileUpdatedHandler(ticketingAPI ticketingapi.TicketingAPI) *UserProfileUpdatedHandler {
-	return &UserProfileUpdatedHandler{ticketingAPI: ticketingAPI}
+func NewUserProfileUpdatedHandler(eventBus eventbus.EventBus) *UserProfileUpdatedHandler {
+	return &UserProfileUpdatedHandler{eventBus: eventBus}
 }
 
 func (h *UserProfileUpdatedHandler) Handle(ctx context.Context, e domain.UserProfileUpdatedDomainEvent) error {
-	return h.ticketingAPI.UpdateCustomer(ctx, e.UserID, e.FirstName, e.LastName)
+	return h.eventBus.Publish(ctx, usersapi.UserProfileUpdatedIntegrationEvent{
+		UserID:    e.UserID,
+		FirstName: e.FirstName,
+		LastName:  e.LastName,
+	})
 }

@@ -4,20 +4,21 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/llannillo/mm/internal/shared/eventbus"
 	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	"github.com/llannillo/mm/modules/users/internal/domain"
-	ticketingapi "github.com/llannillo/mm/modules/ticketing/api"
+	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
 type UserRegisteredHandler struct {
 	getUserQuery *getuser.Handler
-	ticketingAPI ticketingapi.TicketingAPI
+	eventBus     eventbus.EventBus
 }
 
-func NewUserRegisteredHandler(getUserQuery *getuser.Handler, ticketingAPI ticketingapi.TicketingAPI) *UserRegisteredHandler {
+func NewUserRegisteredHandler(getUserQuery *getuser.Handler, eventBus eventbus.EventBus) *UserRegisteredHandler {
 	return &UserRegisteredHandler{
 		getUserQuery: getUserQuery,
-		ticketingAPI: ticketingAPI,
+		eventBus:     eventBus,
 	}
 }
 
@@ -26,5 +27,10 @@ func (h *UserRegisteredHandler) Handle(ctx context.Context, e domain.UserRegiste
 	if err != nil {
 		return fmt.Errorf("get user for customer creation: %w", err)
 	}
-	return h.ticketingAPI.CreateCustomer(ctx, user.ID, user.Email, user.FirstName, user.LastName)
+	return h.eventBus.Publish(ctx, usersapi.UserRegisteredIntegrationEvent{
+		UserID:    user.ID,
+		Email:     user.Email,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+	})
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/cache"
+	"github.com/llannillo/mm/internal/shared/eventbus"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/internal/shared/health"
 	"github.com/llannillo/mm/internal/shared/middleware"
@@ -59,7 +60,7 @@ func main() {
 		logger.Info("connected to Valkey", "address", cfg.Cache.Address)
 	}
 
-	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService, Dispatcher: sharedevents.NewDispatcher()}
+	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService, Dispatcher: sharedevents.NewDispatcher(), EventBus: eventbus.NewInMemoryEventBus()}
 
 	checkers := map[string]health.Checker{
 		"postgres": health.NewPostgresChecker(db),
@@ -72,7 +73,7 @@ func main() {
 	mux.Handle("GET /health", health.NewHandler(checkers))
 	eventsModule := events.New(app)
 	ticketingModule := ticketing.New(app, eventsModule)
-	usersModule := users.New(app, ticketingModule)
+	usersModule := users.New(app)
 	eventsModule.RegisterRoutes(mux)
 	ticketingModule.RegisterRoutes(mux)
 	usersModule.RegisterRoutes(mux)
