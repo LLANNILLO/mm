@@ -7,16 +7,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 )
 
 type EventRepository struct {
-	queries *store.Queries
+	queries    *store.Queries
+	dispatcher *events.Dispatcher
 }
 
-func NewEventRepository(q *store.Queries) *EventRepository {
-	return &EventRepository{queries: q}
+func NewEventRepository(q *store.Queries, d *events.Dispatcher) *EventRepository {
+	return &EventRepository{queries: q, dispatcher: d}
 }
 
 func (r *EventRepository) Insert(ctx context.Context, event *domain.Event) error {
@@ -33,7 +35,9 @@ func (r *EventRepository) Insert(ctx context.Context, event *domain.Event) error
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
 	}
-	return nil
+	domainEvents := event.DomainEvents()
+	event.ClearDomainEvents()
+	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
 
 func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Event, error) {
@@ -49,20 +53,26 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ev
 
 func (r *EventRepository) Update(ctx context.Context, event *domain.Event) error {
 	for _, e := range event.DomainEvents() {
+		var err error
 		switch e.(type) {
 		case domain.EventCancelledDomainEvent:
-			return r.queries.UCancelEvent(ctx, event.ID)
+			err = r.queries.UCancelEvent(ctx, event.ID)
 		case domain.EventPublishedDomainEvent:
-			return r.queries.UPublishEvent(ctx, event.ID)
+			err = r.queries.UPublishEvent(ctx, event.ID)
 		case domain.EventRescheduledDomainEvent:
-			return r.queries.URescheduleEvent(ctx, store.URescheduleEventParams{
+			err = r.queries.URescheduleEvent(ctx, store.URescheduleEventParams{
 				ID:         event.ID,
 				StartsDate: event.StartsAtUtc,
 				EndsDate:   event.EndsAtUtc,
 			})
 		}
+		if err != nil {
+			return err
+		}
 	}
-	return nil
+	domainEvents := event.DomainEvents()
+	event.ClearDomainEvents()
+	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
 
 func rehydrateEvent(row store.SelectEventForUpdateRow) *domain.Event {

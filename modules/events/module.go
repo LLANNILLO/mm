@@ -2,10 +2,13 @@ package events
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/llannillo/mm/internal/shared"
+	sharedevents "github.com/llannillo/mm/internal/shared/events"
 	archivecategory "github.com/llannillo/mm/modules/events/internal/app/commands/archive_category"
 	cancelevent "github.com/llannillo/mm/modules/events/internal/app/commands/cancel_event"
 	createcategory "github.com/llannillo/mm/modules/events/internal/app/commands/create_category"
@@ -15,6 +18,7 @@ import (
 	renamecategory "github.com/llannillo/mm/modules/events/internal/app/commands/rename_category"
 	rescheduleevent "github.com/llannillo/mm/modules/events/internal/app/commands/reschedule_event"
 	updateticketprice "github.com/llannillo/mm/modules/events/internal/app/commands/update_ticket_price"
+	eventhandlers "github.com/llannillo/mm/modules/events/internal/app/event_handlers"
 	getcategory "github.com/llannillo/mm/modules/events/internal/app/queries/get_category"
 	getevent "github.com/llannillo/mm/modules/events/internal/app/queries/get_event"
 	gettickettype "github.com/llannillo/mm/modules/events/internal/app/queries/get_ticket_type"
@@ -26,22 +30,25 @@ import (
 	pgstore "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
 	"github.com/llannillo/mm/modules/events/internal/domain"
-	"github.com/llannillo/mm/internal/shared"
+	eventsapi "github.com/llannillo/mm/modules/events/api"
 )
 
 const moduleName = "events"
 
 type Module struct {
-	handler *httphandler.Handler
+	handler            *httphandler.Handler
+	getTicketTypeQuery *gettickettype.Handler
 }
 
 func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
-	eventRepo := pg.NewEventRepository(queries)
-	categoryRepo := pg.NewCategoryRepository(queries)
-	ticketTypeRepo := pg.NewTicketTypeRepository(queries)
+	sharedevents.Register(app.Dispatcher, eventhandlers.HandleEventRescheduled)
+
+	eventRepo := pg.NewEventRepository(queries, app.Dispatcher)
+	categoryRepo := pg.NewCategoryRepository(queries, app.Dispatcher)
+	ticketTypeRepo := pg.NewTicketTypeRepository(queries, app.Dispatcher)
 
 	eventReader := pg.NewEventReader(queries)
 	categoryReader := pg.NewCategoryReader(queries)
@@ -67,18 +74,43 @@ func New(app shared.App) *Module {
 		listCategories:  listcategories.NewHandler(categoryReader),
 	}
 
+	getTicketTypeHandler := gettickettype.NewHandler(ticketTypeReader)
+
 	tickets := &ticketService{
 		log:               app.Logger,
 		createTicketType:  createtickettype.NewHandler(ticketTypeRepo),
 		updateTicketPrice: updateticketprice.NewHandler(ticketTypeRepo),
-		getTicketType:     gettickettype.NewHandler(ticketTypeReader),
+		getTicketType:     getTicketTypeHandler,
 		listTicketTypes:   listtickettype.NewHandler(ticketTypeReader),
 	}
 
 	return &Module{
-		handler: httphandler.NewHandler(events, categories, tickets),
+		handler:            httphandler.NewHandler(events, categories, tickets),
+		getTicketTypeQuery: getTicketTypeHandler,
 	}
 }
+
+// GetTicketType implements eventsapi.EventsAPI — allows other modules to query ticket types.
+// Returns nil, nil when the ticket type does not exist.
+func (m *Module) GetTicketType(ctx context.Context, id uuid.UUID) (*eventsapi.TicketTypeResponse, error) {
+	resp, err := m.getTicketTypeQuery.Handle(ctx, gettickettype.Query{ID: id})
+	if err != nil {
+		if errors.Is(err, domain.ErrTicketTypeNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &eventsapi.TicketTypeResponse{
+		ID:       resp.ID,
+		EventID:  resp.EventID,
+		Name:     resp.Name,
+		Price:    resp.Price,
+		Currency: resp.Currency,
+		Quantity: resp.Quantity,
+	}, nil
+}
+
+var _ eventsapi.EventsAPI = (*Module)(nil)
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	m.handler.RegisterRoutes(mux)

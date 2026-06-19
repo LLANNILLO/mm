@@ -1,0 +1,119 @@
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  DB_URL: '{{.DATABASE_URL | default "postgres://postgres:postgres@localhost:5432/evently?sslmode=disable"}}'
+  EVENTS_MIGRATIONS: modules/events/internal/adapters/driven/postgres/migrations
+  USERS_MIGRATIONS: modules/users/internal/adapters/driven/postgres/migrations
+  TICKETING_MIGRATIONS: modules/ticketing/internal/adapters/driven/postgres/migrations
+  EVENTS_SQLC: modules/events/internal/adapters/driven/postgres
+  USERS_SQLC: modules/users/internal/adapters/driven/postgres
+  TICKETING_SQLC: modules/ticketing/internal/adapters/driven/postgres
+  EVENTS_TABLE: goose_db_events_versions
+  USERS_TABLE: goose_db_users_versions
+  TICKETING_TABLE: goose_db_ticketing_versions
+
+tasks:
+  # ── Migrations ──────────────────────────────────────────────────────────────
+
+  migrate:
+    desc: Run all module migrations (up)
+    cmds:
+      - task: migrate:events
+      - task: migrate:users
+      - task: migrate:ticketing
+
+  migrate:events:
+    desc: Run events module migrations (up)
+    cmd: goose -dir {{.EVENTS_MIGRATIONS}} -table {{.EVENTS_TABLE}} postgres "{{.DB_URL}}" up
+
+  migrate:users:
+    desc: Run users module migrations (up)
+    cmd: goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" up
+
+  migrate:ticketing:
+    desc: Run ticketing module migrations (up)
+    cmd: goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" up
+
+  migrate:down:
+    desc: Rollback all module migrations (down, reverse order)
+    cmds:
+      - task: migrate:down:ticketing
+      - task: migrate:down:users
+      - task: migrate:down:events
+
+  migrate:down:events:
+    desc: Rollback events module migrations (down)
+    cmd: goose -dir {{.EVENTS_MIGRATIONS}} -table {{.EVENTS_TABLE}} postgres "{{.DB_URL}}" down
+
+  migrate:down:users:
+    desc: Rollback users module migrations (down)
+    cmd: goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" down
+
+  migrate:down:ticketing:
+    desc: Rollback ticketing module migrations (down)
+    cmd: goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" down
+
+  migrate:status:
+    desc: Show migration status for all modules
+    cmds:
+      - echo "=== events ==="
+      - goose -dir {{.EVENTS_MIGRATIONS}} -table {{.EVENTS_TABLE}} postgres "{{.DB_URL}}" status
+      - echo "=== users ==="
+      - goose -dir {{.USERS_MIGRATIONS}} -table {{.USERS_TABLE}} postgres "{{.DB_URL}}" status
+      - echo "=== ticketing ==="
+      - goose -dir {{.TICKETING_MIGRATIONS}} -table {{.TICKETING_TABLE}} postgres "{{.DB_URL}}" status
+
+  db:reset:
+    desc: Drop all module schemas and version tables — DEV ONLY
+    cmd: psql "{{.DB_URL}}" -c "DROP SCHEMA IF EXISTS events CASCADE; DROP SCHEMA IF EXISTS users CASCADE; DROP SCHEMA IF EXISTS ticketing CASCADE; DROP TABLE IF EXISTS goose_db_events_versions; DROP TABLE IF EXISTS goose_db_users_versions; DROP TABLE IF EXISTS goose_db_ticketing_versions; DROP TABLE IF EXISTS goose_db_version;"
+
+  # ── SQLC ────────────────────────────────────────────────────────────────────
+
+  sqlc:
+    desc: Regenerate SQLC code for all modules
+    cmds:
+      - task: sqlc:events
+      - task: sqlc:users
+      - task: sqlc:ticketing
+
+  sqlc:events:
+    desc: Regenerate SQLC code for events module
+    dir: "{{.EVENTS_SQLC}}"
+    cmd: sqlc generate
+
+  sqlc:users:
+    desc: Regenerate SQLC code for users module
+    dir: "{{.USERS_SQLC}}"
+    cmd: sqlc generate
+
+  sqlc:ticketing:
+    desc: Regenerate SQLC code for ticketing module
+    dir: "{{.TICKETING_SQLC}}"
+    cmd: sqlc generate
+
+  # ── Build / Dev ─────────────────────────────────────────────────────────────
+
+  build:
+    desc: Build the API binary
+    cmd: go build -o tmp/api ./cmd/api
+
+  run:
+    desc: Run the API locally (requires DB running)
+    cmd: go run ./cmd/api
+
+  up:
+    desc: Start infrastructure via docker compose
+    cmd: docker compose up -d
+
+  down:
+    desc: Stop all docker compose services
+    cmd: docker compose down
+
+  logs-*:
+    desc: Start tracking records for a specific service
+    vars:
+      SERVICE: "{{index .MATCH 0}}"
+    cmds:
+      - docker compose logs -f {{.SERVICE}}
