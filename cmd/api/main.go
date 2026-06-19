@@ -72,7 +72,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", health.NewHandler(checkers))
 	eventsModule := events.New(app)
-	ticketingModule := ticketing.New(app, eventsModule)
+	ticketingModule := ticketing.New(app)
 	usersModule := users.New(app)
 	eventsModule.RegisterRoutes(mux)
 	ticketingModule.RegisterRoutes(mux)

@@ -9,13 +9,17 @@ import (
 	"github.com/llannillo/mm/internal/shared/eventbus"
 	ticketingapp "github.com/llannillo/mm/modules/ticketing/internal/app"
 	additemtocart "github.com/llannillo/mm/modules/ticketing/internal/app/commands/add_item_to_cart"
+	cancelevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/cancel_event"
 	createcustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_customer"
+	createevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_event"
+	createorder "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_order"
+	rescheduleevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/reschedule_event"
 	updatecustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_customer"
+	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
 	"github.com/llannillo/mm/modules/ticketing/internal/app/consumers"
 	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
 	pgstore "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/ticketing/internal/adapters/driving/http"
-	eventsapi "github.com/llannillo/mm/modules/events/api"
 	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
@@ -25,9 +29,19 @@ type Module struct {
 	handler *httphandler.Handler
 }
 
-func New(app shared.App, eventsAPI eventsapi.EventsAPI) *Module {
+func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
+
 	customerRepo := pg.NewCustomerRepository(queries)
+	eventRepo := pg.NewEventRepository(queries)
+	ticketTypeRepo := pg.NewTicketTypeRepository(queries)
+	orderRepo := pg.NewOrderRepository(app.DB, queries)
+	ticketRepo := pg.NewTicketRepository(queries)
+	paymentRepo := pg.NewPaymentRepository(queries)
+
+	_ = ticketRepo
+	_ = paymentRepo
+
 	cartService := ticketingapp.NewCartService(app.Cache)
 
 	createCustomerHandler := createcustomer.NewHandler(customerRepo)
@@ -36,9 +50,15 @@ func New(app shared.App, eventsAPI eventsapi.EventsAPI) *Module {
 	eventbus.Subscribe[usersapi.UserRegisteredIntegrationEvent](app.EventBus, consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle)
 	eventbus.Subscribe[usersapi.UserProfileUpdatedIntegrationEvent](app.EventBus, consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle)
 
+	_ = createevent.NewHandler(eventRepo, ticketTypeRepo)
+	_ = cancelevent.NewHandler(eventRepo)
+	_ = rescheduleevent.NewHandler(eventRepo)
+	_ = createorder.NewHandler(ticketTypeRepo, orderRepo)
+	_ = updatetickettypeprice.NewHandler(ticketTypeRepo)
+
 	carts := &cartServiceImpl{
 		log:           app.Logger,
-		addItemToCart: additemtocart.NewHandler(cartService, customerRepo, eventsAPI),
+		addItemToCart: additemtocart.NewHandler(cartService, customerRepo, ticketTypeRepo),
 	}
 
 	return &Module{
