@@ -10,18 +10,23 @@ import (
 )
 
 type Handler struct {
-	repo outbound.UserRepository
+	identity outbound.IdentityProvider
+	repo     outbound.UserRepository
 }
 
-func NewHandler(repo outbound.UserRepository) *Handler {
-	return &Handler{repo: repo}
+func NewHandler(identity outbound.IdentityProvider, repo outbound.UserRepository) *Handler {
+	return &Handler{identity: identity, repo: repo}
 }
 
 func (h *Handler) Handle(ctx context.Context, cmd Command) (uuid.UUID, error) {
 	if err := cmd.Validate(); err != nil {
 		return uuid.Nil, err
 	}
-	user := domain.NewUser(cmd.Email, cmd.FirstName, cmd.LastName)
+	identityID, err := h.identity.RegisterUser(ctx, cmd.Email, cmd.Password, cmd.FirstName, cmd.LastName)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("register user in identity provider: %w", err)
+	}
+	user := domain.NewUser(cmd.Email, cmd.FirstName, cmd.LastName, identityID)
 	if err := h.repo.Insert(ctx, user); err != nil {
 		return uuid.Nil, fmt.Errorf("register user: %w", err)
 	}

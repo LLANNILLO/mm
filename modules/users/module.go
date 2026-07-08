@@ -5,17 +5,22 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/llannillo/mm/internal/shared"
+	"github.com/llannillo/mm/internal/shared/auth"
+	"github.com/llannillo/mm/internal/shared/cache"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	pg "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres"
+	pgstore "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
+	kc "github.com/llannillo/mm/modules/users/internal/adapters/driven/keycloak"
+	httphandler "github.com/llannillo/mm/modules/users/internal/adapters/driving/http"
 	registeruser "github.com/llannillo/mm/modules/users/internal/app/commands/register_user"
 	updateuser "github.com/llannillo/mm/modules/users/internal/app/commands/update_user"
 	eventhandlers "github.com/llannillo/mm/modules/users/internal/app/event_handlers"
 	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
-	pg "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres"
-	pgstore "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
-	httphandler "github.com/llannillo/mm/modules/users/internal/adapters/driving/http"
+	getuserperms "github.com/llannillo/mm/modules/users/internal/app/queries/get_user_permissions"
 	"github.com/llannillo/mm/modules/users/internal/domain"
 	"github.com/llannillo/mm/modules/users/internal/ports/inbound"
 	usersapi "github.com/llannillo/mm/modules/users/api"
@@ -23,9 +28,12 @@ import (
 
 const moduleName = "users"
 
+const permissionsTTL = 5 * time.Minute
+
 type Module struct {
-	handler       *httphandler.Handler
-	getUserQuery  *getuser.Handler
+	handler      *httphandler.Handler
+	getUserQuery *getuser.Handler
+	permSvc      *permissionService
 }
 
 func New(app shared.App) *Module {
@@ -39,17 +47,35 @@ func New(app shared.App) *Module {
 	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserRegisteredHandler(getUserHandler, app.EventBus).Handle)
 	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserProfileUpdatedHandler(app.EventBus).Handle)
 
+	keycloakClient := kc.NewClient(kc.Config{
+		AdminURL:                 app.Config.Users.Keycloak.AdminURL,
+		TokenURL:                 app.Config.Users.Keycloak.TokenURL,
+		ConfidentialClientID:     app.Config.Users.Keycloak.ConfidentialClientID,
+		ConfidentialClientSecret: app.Config.Users.Keycloak.ConfidentialClientSecret,
+	})
+
 	users := &userService{
 		log:          app.Logger,
-		registerUser: registeruser.NewHandler(userRepo),
+		registerUser: registeruser.NewHandler(keycloakClient, userRepo),
 		updateUser:   updateuser.NewHandler(userRepo),
 		getUser:      getUserHandler,
+	}
+
+	permSvc := &permissionService{
+		handler: getuserperms.NewHandler(app.DB),
+		cache:   app.Cache,
 	}
 
 	return &Module{
 		handler:      httphandler.NewHandler(users),
 		getUserQuery: getUserHandler,
+		permSvc:      permSvc,
 	}
+}
+
+// PermissionService returns the auth.PermissionService backed by Valkey cache + Postgres.
+func (m *Module) PermissionService() auth.PermissionService {
+	return m.permSvc
 }
 
 // GetUser implements usersapi.UsersAPI — allows other modules to query users.
@@ -118,4 +144,43 @@ func (s *userService) UpdateUser(ctx context.Context, cmd updateuser.Command) er
 	err := s.updateUser.Handle(ctx, cmd)
 	done(err)
 	return err
+}
+
+// -- permission service --
+
+type cachedPermissions struct {
+	UserID      uuid.UUID `json:"user_id"`
+	Permissions []string  `json:"permissions"`
+}
+
+type permissionService struct {
+	handler *getuserperms.Handler
+	cache   cache.Service
+}
+
+var _ auth.PermissionService = (*permissionService)(nil)
+
+func (s *permissionService) GetUserPermissions(ctx context.Context, identityID string) (uuid.UUID, []string, error) {
+	cacheKey := "permissions:" + identityID
+
+	if s.cache != nil {
+		var hit cachedPermissions
+		if err := s.cache.Get(ctx, cacheKey, &hit); err == nil {
+			return hit.UserID, hit.Permissions, nil
+		}
+	}
+
+	result, err := s.handler.Handle(ctx, identityID)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	if s.cache != nil {
+		_ = s.cache.Set(ctx, cacheKey, cachedPermissions{
+			UserID:      result.UserID,
+			Permissions: result.Permissions,
+		}, permissionsTTL)
+	}
+
+	return result.UserID, result.Permissions, nil
 }

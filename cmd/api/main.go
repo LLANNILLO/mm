@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/cache"
@@ -60,6 +61,20 @@ func main() {
 		logger.Info("connected to Valkey", "address", cfg.Cache.Address)
 	}
 
+	var tokenVerifier *oidc.IDTokenVerifier
+	if cfg.Authentication.IssuerURL != "" {
+		provider, err := oidc.NewProvider(context.Background(), cfg.Authentication.IssuerURL)
+		if err != nil {
+			logger.Error("failed to initialize OIDC provider", "issuer", cfg.Authentication.IssuerURL, "error", err)
+			log.Fatal(err)
+		}
+		tokenVerifier = provider.Verifier(&oidc.Config{
+				ClientID:        cfg.Authentication.Audience,
+				SkipIssuerCheck: true,
+			})
+		logger.Info("OIDC provider initialized", "issuer", cfg.Authentication.IssuerURL)
+	}
+
 	app := shared.App{Config: cfg, DB: db, Logger: logger, Cache: cacheService, Dispatcher: sharedevents.NewDispatcher(), EventBus: eventbus.NewInMemoryEventBus()}
 
 	checkers := map[string]health.Checker{
@@ -79,6 +94,9 @@ func main() {
 	usersModule.RegisterRoutes(mux)
 
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
+	if tokenVerifier != nil {
+		handler = middleware.Authentication(tokenVerifier, usersModule.PermissionService())(handler)
+	}
 
 	logger.Info("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))

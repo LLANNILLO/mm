@@ -3,14 +3,16 @@ package handler
 import (
 	"net/http"
 
-	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
+	"github.com/llannillo/mm/internal/shared/auth"
 	registeruser "github.com/llannillo/mm/modules/users/internal/app/commands/register_user"
+	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	updateuser "github.com/llannillo/mm/modules/users/internal/app/commands/update_user"
 )
 
 func (h *Handler) registerUser(w http.ResponseWriter, r *http.Request) {
 	type request struct {
 		Email     string `json:"email"`
+		Password  string `json:"password"`
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
 	}
@@ -20,6 +22,7 @@ func (h *Handler) registerUser(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.users.RegisterUser(r.Context(), registeruser.Command{
 		Email:     req.Email,
+		Password:  req.Password,
 		FirstName: req.FirstName,
 		LastName:  req.LastName,
 	})
@@ -31,11 +34,12 @@ func (h *Handler) registerUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getUserProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUID(w, r.PathValue("id"))
+	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	resp, err := h.users.GetUser(r.Context(), getuser.Query{UserID: id})
+	resp, err := h.users.GetUser(r.Context(), getuser.Query{UserID: claims.UserID})
 	if err != nil {
 		handleDomainError(w, err)
 		return
@@ -44,8 +48,9 @@ func (h *Handler) getUserProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateUserProfile(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseUUID(w, r.PathValue("id"))
+	claims, ok := auth.ClaimsFromContext(r.Context())
 	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	type request struct {
@@ -57,7 +62,7 @@ func (h *Handler) updateUserProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.users.UpdateUser(r.Context(), updateuser.Command{
-		UserID:    id,
+		UserID:    claims.UserID,
 		FirstName: req.FirstName,
 		LastName:  req.LastName,
 	}); err != nil {
