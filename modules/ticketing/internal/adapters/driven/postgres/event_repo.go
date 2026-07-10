@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,20 +22,20 @@ func NewEventRepository(q *store.Queries) *EventRepository {
 }
 
 func (r *EventRepository) Insert(ctx context.Context, e *domain.Event) error {
-	startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc, Valid: true}
+	startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc(), Valid: true}
 	endsAtUtc := pgtype.Timestamptz{}
-	if e.EndsAtUtc != nil {
-		endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc, Valid: true}
+	if e.EndsAtUtc() != nil {
+		endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc(), Valid: true}
 	}
 
 	err := r.queries.InsertEvent(ctx, store.InsertEventParams{
-		ID:          e.ID,
-		Title:       e.Title,
-		Description: e.Description,
-		Location:    e.Location,
+		ID:          e.ID(),
+		Title:       e.Title(),
+		Description: e.Description(),
+		Location:    e.Location(),
 		StartsAtUtc: startsAtUtc,
 		EndsAtUtc:   endsAtUtc,
-		Cancelled:   e.Cancelled,
+		Cancelled:   e.Cancelled(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
@@ -51,39 +52,32 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ev
 		return nil, fmt.Errorf("get event: %w", err)
 	}
 
-	e := &domain.Event{
-		ID:          row.ID,
-		Title:       row.Title,
-		Description: row.Description,
-		Location:    row.Location,
-		StartsAtUtc: row.StartsAtUtc.Time,
-		Cancelled:   row.Cancelled,
-	}
+	var endsAtUtc *time.Time
 	if row.EndsAtUtc.Valid {
 		t := row.EndsAtUtc.Time
-		e.EndsAtUtc = &t
+		endsAtUtc = &t
 	}
-	return e, nil
+	return domain.RehydrateEvent(row.ID, row.Title, row.Description, row.Location, row.StartsAtUtc.Time, endsAtUtc, row.Cancelled), nil
 }
 
 func (r *EventRepository) Update(ctx context.Context, e *domain.Event) error {
 	for _, ev := range e.DomainEvents() {
 		switch ev.(type) {
 		case domain.EventRescheduledDomainEvent:
-			startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc, Valid: true}
+			startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc(), Valid: true}
 			endsAtUtc := pgtype.Timestamptz{}
-			if e.EndsAtUtc != nil {
-				endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc, Valid: true}
+			if e.EndsAtUtc() != nil {
+				endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc(), Valid: true}
 			}
 			if err := r.queries.UpdateEventSchedule(ctx, store.UpdateEventScheduleParams{
 				StartsAtUtc: startsAtUtc,
 				EndsAtUtc:   endsAtUtc,
-				ID:          e.ID,
+				ID:          e.ID(),
 			}); err != nil {
 				return fmt.Errorf("update event schedule: %w", err)
 			}
 		case domain.EventCancelledDomainEvent:
-			if err := r.queries.CancelEvent(ctx, e.ID); err != nil {
+			if err := r.queries.CancelEvent(ctx, e.ID()); err != nil {
 				return fmt.Errorf("cancel event: %w", err)
 			}
 		}

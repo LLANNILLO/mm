@@ -21,13 +21,13 @@ func NewTicketTypeRepository(q *store.Queries) *TicketTypeRepository {
 
 func (r *TicketTypeRepository) Insert(ctx context.Context, tt *domain.TicketType) error {
 	err := r.queries.InsertTicketType(ctx, store.InsertTicketTypeParams{
-		ID:                tt.ID,
-		EventID:           tt.EventID,
-		Name:              tt.Name,
-		Price:             tt.Price,
-		Currency:          tt.Currency,
-		Quantity:          tt.Quantity,
-		AvailableQuantity: tt.AvailableQuantity,
+		ID:                tt.ID(),
+		EventID:           tt.EventID(),
+		Name:              tt.Name(),
+		Price:             tt.Price(),
+		Currency:          tt.Currency(),
+		Quantity:          tt.Quantity(),
+		AvailableQuantity: tt.AvailableQuantity(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert ticket type: %w", err)
@@ -52,21 +52,13 @@ func (r *TicketTypeRepository) GetByID(ctx context.Context, id uuid.UUID) (*doma
 		}
 		return nil, fmt.Errorf("get ticket type: %w", err)
 	}
-	return &domain.TicketType{
-		ID:                row.ID,
-		EventID:           row.EventID,
-		Name:              row.Name,
-		Price:             row.Price,
-		Currency:          row.Currency,
-		Quantity:          row.Quantity,
-		AvailableQuantity: row.AvailableQuantity,
-	}, nil
+	return domain.RehydrateTicketType(row.ID, row.EventID, row.Name, row.Price, row.Currency, row.Quantity, row.AvailableQuantity), nil
 }
 
 func (r *TicketTypeRepository) Update(ctx context.Context, tt *domain.TicketType) error {
 	err := r.queries.UpdateTicketTypePrice(ctx, store.UpdateTicketTypePriceParams{
-		Price: tt.Price,
-		ID:    tt.ID,
+		Price: tt.Price(),
+		ID:    tt.ID(),
 	})
 	if err != nil {
 		return fmt.Errorf("update ticket type price: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,24 +22,24 @@ func NewPaymentRepository(q *store.Queries) *PaymentRepository {
 }
 
 func (r *PaymentRepository) Insert(ctx context.Context, p *domain.Payment) error {
-	createdAtUtc := pgtype.Timestamptz{Time: p.CreatedAtUtc, Valid: true}
+	createdAtUtc := pgtype.Timestamptz{Time: p.CreatedAtUtc(), Valid: true}
 
 	amountRefunded := pgtype.Int8{}
-	if p.AmountRefunded != nil {
-		amountRefunded = pgtype.Int8{Int64: *p.AmountRefunded, Valid: true}
+	if p.AmountRefunded() != nil {
+		amountRefunded = pgtype.Int8{Int64: *p.AmountRefunded(), Valid: true}
 	}
 
 	refundedAtUtc := pgtype.Timestamptz{}
-	if p.RefundedAtUtc != nil {
-		refundedAtUtc = pgtype.Timestamptz{Time: *p.RefundedAtUtc, Valid: true}
+	if p.RefundedAtUtc() != nil {
+		refundedAtUtc = pgtype.Timestamptz{Time: *p.RefundedAtUtc(), Valid: true}
 	}
 
 	err := r.queries.InsertPayment(ctx, store.InsertPaymentParams{
-		ID:             p.ID,
-		OrderID:        p.OrderID,
-		TransactionID:  p.TransactionID,
-		Amount:         p.Amount,
-		Currency:       p.Currency,
+		ID:             p.ID(),
+		OrderID:        p.OrderID(),
+		TransactionID:  p.TransactionID(),
+		Amount:         p.Amount(),
+		Currency:       p.Currency(),
 		AmountRefunded: amountRefunded,
 		CreatedAtUtc:   createdAtUtc,
 		RefundedAtUtc:  refundedAtUtc,
@@ -59,21 +60,15 @@ func (r *PaymentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.
 		return nil, fmt.Errorf("get payment: %w", err)
 	}
 
-	payment := &domain.Payment{
-		ID:            row.ID,
-		OrderID:       row.OrderID,
-		TransactionID: row.TransactionID,
-		Amount:        row.Amount,
-		Currency:      row.Currency,
-		CreatedAtUtc:  row.CreatedAtUtc.Time,
-	}
+	var amountRefunded *int64
 	if row.AmountRefunded.Valid {
 		v := row.AmountRefunded.Int64
-		payment.AmountRefunded = &v
+		amountRefunded = &v
 	}
+	var refundedAtUtc *time.Time
 	if row.RefundedAtUtc.Valid {
 		t := row.RefundedAtUtc.Time
-		payment.RefundedAtUtc = &t
+		refundedAtUtc = &t
 	}
-	return payment, nil
+	return domain.RehydratePayment(row.ID, row.OrderID, row.TransactionID, row.Amount, row.Currency, amountRefunded, row.CreatedAtUtc.Time, refundedAtUtc), nil
 }
