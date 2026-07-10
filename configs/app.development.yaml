@@ -5,3 +5,7 @@ logging:
 
 cache:
   address: "evently.valkey:6379"
+
+authentication:
+  issuer_url: "http://evently.identity:8080/realms/evently"
+  audience: "account"

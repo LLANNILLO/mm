@@ -18,8 +18,8 @@ func NewHandler(users inbound.UserService) *Handler {
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /users/register", h.registerUser)
-	mux.HandleFunc("GET /users/{id}/profile", h.getUserProfile)
-	mux.HandleFunc("PUT /users/{id}/profile", h.updateUserProfile)
+	mux.HandleFunc("GET /users/me/profile", h.getUserProfile)
+	mux.HandleFunc("PUT /users/me/profile", h.updateUserProfile)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

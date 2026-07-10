@@ -4,18 +4,20 @@ import "github.com/google/uuid"
 
 type User struct {
 	entity
-	ID        uuid.UUID
-	Email     string
-	FirstName string
-	LastName  string
+	ID         uuid.UUID
+	Email      string
+	FirstName  string
+	LastName   string
+	IdentityID string
 }
 
-func NewUser(email, firstName, lastName string) *User {
+func NewUser(email, firstName, lastName, identityID string) *User {
 	u := &User{
-		ID:        uuid.New(),
-		Email:     email,
-		FirstName: firstName,
-		LastName:  lastName,
+		ID:         uuid.New(),
+		Email:      email,
+		FirstName:  firstName,
+		LastName:   lastName,
+		IdentityID: identityID,
 	}
 	u.raise(UserRegisteredDomainEvent{UserID: u.ID})
 	return u
