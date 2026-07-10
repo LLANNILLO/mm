@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	"github.com/llannillo/mm/modules/users/internal/domain"
-	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
 type UserRegisteredHandler struct {
@@ -27,7 +27,7 @@ func (h *UserRegisteredHandler) Handle(ctx context.Context, e domain.UserRegiste
 	if err != nil {
 		return fmt.Errorf("get user for customer creation: %w", err)
 	}
-	return h.eventBus.Publish(ctx, usersapi.UserRegisteredIntegrationEvent{
+	return h.eventBus.Publish(ctx, usersintegrationevents.UserRegisteredIntegrationEvent{
 		UserID:    user.ID,
 		Email:     user.Email,
 		FirstName: user.FirstName,

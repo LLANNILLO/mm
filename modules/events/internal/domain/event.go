@@ -7,25 +7,34 @@ import (
 )
 
 var (
-	ErrEventNotFound        = &DomainError{Code: "event.not_found", Message: "event not found", Kind: KindNotFound}
-	ErrEventNotDraft        = &DomainError{Code: "event.not_draft", Message: "event is not in draft status", Kind: KindConflict}
+	ErrEventNotFound         = &DomainError{Code: "event.not_found", Message: "event not found", Kind: KindNotFound}
+	ErrEventNotDraft         = &DomainError{Code: "event.not_draft", Message: "event is not in draft status", Kind: KindConflict}
 	ErrEventAlreadyCancelled = &DomainError{Code: "event.already_cancelled", Message: "event is already cancelled", Kind: KindConflict}
-	ErrEventAlreadyStarted  = &DomainError{Code: "event.already_started", Message: "event has already started", Kind: KindConflict}
-	ErrEventStartDateInPast = &DomainError{Code: "event.start_date_in_past", Message: "start date must be in the future", Kind: KindValidation}
-	ErrEventEndBeforeStart  = &DomainError{Code: "event.end_before_start", Message: "end date must be after start date", Kind: KindValidation}
+	ErrEventAlreadyStarted   = &DomainError{Code: "event.already_started", Message: "event has already started", Kind: KindConflict}
+	ErrEventStartDateInPast  = &DomainError{Code: "event.start_date_in_past", Message: "start date must be in the future", Kind: KindValidation}
+	ErrEventEndBeforeStart   = &DomainError{Code: "event.end_before_start", Message: "end date must be after start date", Kind: KindValidation}
 )
 
 type Event struct {
 	entity
-	ID          uuid.UUID
-	CategoryID  uuid.UUID
-	Title       string
-	Description *string
-	Location    *string
-	StartsAtUtc time.Time
-	EndsAtUtc   *time.Time
-	Status      EventStatus
+	id          uuid.UUID
+	categoryID  uuid.UUID
+	title       string
+	description *string
+	location    *string
+	startsAtUtc time.Time
+	endsAtUtc   *time.Time
+	status      EventStatus
 }
+
+func (e *Event) ID() uuid.UUID          { return e.id }
+func (e *Event) CategoryID() uuid.UUID  { return e.categoryID }
+func (e *Event) Title() string          { return e.title }
+func (e *Event) Description() *string   { return e.description }
+func (e *Event) Location() *string      { return e.location }
+func (e *Event) StartsAtUtc() time.Time { return e.startsAtUtc }
+func (e *Event) EndsAtUtc() *time.Time  { return e.endsAtUtc }
+func (e *Event) Status() EventStatus    { return e.status }
 
 func NewEvent(
 	categoryID uuid.UUID,
@@ -43,49 +52,72 @@ func NewEvent(
 	}
 
 	e := &Event{
-		ID:          uuid.New(),
-		CategoryID:  categoryID,
-		Title:       title,
-		Description: description,
-		Location:    location,
-		StartsAtUtc: startsAtUtc,
-		EndsAtUtc:   endsAtUtc,
-		Status:      StatusDraft,
+		id:          uuid.New(),
+		categoryID:  categoryID,
+		title:       title,
+		description: description,
+		location:    location,
+		startsAtUtc: startsAtUtc,
+		endsAtUtc:   endsAtUtc,
+		status:      StatusDraft,
 	}
-	e.raise(EventCreatedDomainEvent{EventID: e.ID})
+	e.raise(EventCreatedDomainEvent{EventID: e.id})
 	return e, nil
 }
 
+// RehydrateEvent reconstructs an Event from persisted state without
+// re-running creation invariants or raising domain events. Only repositories
+// may call this.
+func RehydrateEvent(
+	id, categoryID uuid.UUID,
+	title string,
+	description, location *string,
+	startsAtUtc time.Time,
+	endsAtUtc *time.Time,
+	status EventStatus,
+) *Event {
+	return &Event{
+		id:          id,
+		categoryID:  categoryID,
+		title:       title,
+		description: description,
+		location:    location,
+		startsAtUtc: startsAtUtc,
+		endsAtUtc:   endsAtUtc,
+		status:      status,
+	}
+}
+
 func (e *Event) Publish() error {
-	if e.Status != StatusDraft {
+	if e.status != StatusDraft {
 		return ErrEventNotDraft
 	}
-	e.Status = StatusPublished
-	e.raise(EventPublishedDomainEvent{EventID: e.ID})
+	e.status = StatusPublished
+	e.raise(EventPublishedDomainEvent{EventID: e.id})
 	return nil
 }
 
 func (e *Event) Cancel(now time.Time) error {
-	if e.Status == StatusCancelled {
+	if e.status == StatusCancelled {
 		return ErrEventAlreadyCancelled
 	}
-	if now.After(e.StartsAtUtc) {
+	if now.After(e.startsAtUtc) {
 		return ErrEventAlreadyStarted
 	}
-	e.Status = StatusCancelled
-	e.raise(EventCancelledDomainEvent{EventID: e.ID})
+	e.status = StatusCancelled
+	e.raise(EventCancelledDomainEvent{EventID: e.id})
 	return nil
 }
 
 func (e *Event) Reschedule(startsAt time.Time, endsAt *time.Time) error {
-	sameStart := e.StartsAtUtc.Equal(startsAt)
-	sameEnd := (e.EndsAtUtc == nil && endsAt == nil) ||
-		(e.EndsAtUtc != nil && endsAt != nil && e.EndsAtUtc.Equal(*endsAt))
+	sameStart := e.startsAtUtc.Equal(startsAt)
+	sameEnd := (e.endsAtUtc == nil && endsAt == nil) ||
+		(e.endsAtUtc != nil && endsAt != nil && e.endsAtUtc.Equal(*endsAt))
 	if sameStart && sameEnd {
 		return nil
 	}
-	e.StartsAtUtc = startsAt
-	e.EndsAtUtc = endsAt
-	e.raise(EventRescheduledDomainEvent{EventID: e.ID, StartsAtUtc: startsAt, EndsAtUtc: endsAt})
+	e.startsAtUtc = startsAt
+	e.endsAtUtc = endsAt
+	e.raise(EventRescheduledDomainEvent{EventID: e.id, StartsAtUtc: startsAt, EndsAtUtc: endsAt})
 	return nil
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 
 	createcustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_customer"
-	usersapi "github.com/llannillo/mm/modules/users/api"
+	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 )
 
 type UserRegisteredConsumer struct {
@@ -15,7 +15,7 @@ func NewUserRegisteredConsumer(h *createcustomer.Handler) *UserRegisteredConsume
 	return &UserRegisteredConsumer{createCustomer: h}
 }
 
-func (c *UserRegisteredConsumer) Handle(ctx context.Context, e usersapi.UserRegisteredIntegrationEvent) error {
+func (c *UserRegisteredConsumer) Handle(ctx context.Context, e usersintegrationevents.UserRegisteredIntegrationEvent) error {
 	return c.createCustomer.Handle(ctx, createcustomer.Command{
 		ID:        e.UserID,
 		Email:     e.Email,

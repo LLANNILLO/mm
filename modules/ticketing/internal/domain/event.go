@@ -8,14 +8,22 @@ import (
 
 type Event struct {
 	entity
-	ID          uuid.UUID
-	Title       string
-	Description *string
-	Location    *string
-	StartsAtUtc time.Time
-	EndsAtUtc   *time.Time
-	Cancelled   bool
+	id          uuid.UUID
+	title       string
+	description *string
+	location    *string
+	startsAtUtc time.Time
+	endsAtUtc   *time.Time
+	cancelled   bool
 }
+
+func (e *Event) ID() uuid.UUID          { return e.id }
+func (e *Event) Title() string          { return e.title }
+func (e *Event) Description() *string   { return e.description }
+func (e *Event) Location() *string      { return e.location }
+func (e *Event) StartsAtUtc() time.Time { return e.startsAtUtc }
+func (e *Event) EndsAtUtc() *time.Time  { return e.endsAtUtc }
+func (e *Event) Cancelled() bool        { return e.cancelled }
 
 func NewEvent(
 	id uuid.UUID,
@@ -26,38 +34,59 @@ func NewEvent(
 	endsAtUtc *time.Time,
 ) *Event {
 	return &Event{
-		ID:          id,
-		Title:       title,
-		Description: description,
-		Location:    location,
-		StartsAtUtc: startsAtUtc,
-		EndsAtUtc:   endsAtUtc,
-		Cancelled:   false,
+		id:          id,
+		title:       title,
+		description: description,
+		location:    location,
+		startsAtUtc: startsAtUtc,
+		endsAtUtc:   endsAtUtc,
+		cancelled:   false,
+	}
+}
+
+// RehydrateEvent reconstructs an Event replica from persisted state without
+// raising domain events. Only repositories may call this.
+func RehydrateEvent(
+	id uuid.UUID,
+	title string,
+	description, location *string,
+	startsAtUtc time.Time,
+	endsAtUtc *time.Time,
+	cancelled bool,
+) *Event {
+	return &Event{
+		id:          id,
+		title:       title,
+		description: description,
+		location:    location,
+		startsAtUtc: startsAtUtc,
+		endsAtUtc:   endsAtUtc,
+		cancelled:   cancelled,
 	}
 }
 
 func (e *Event) Reschedule(startsAtUtc time.Time, endsAtUtc *time.Time) {
-	e.StartsAtUtc = startsAtUtc
-	e.EndsAtUtc = endsAtUtc
+	e.startsAtUtc = startsAtUtc
+	e.endsAtUtc = endsAtUtc
 	e.raise(EventRescheduledDomainEvent{
-		EventID:     e.ID,
+		EventID:     e.id,
 		StartsAtUtc: startsAtUtc,
 		EndsAtUtc:   endsAtUtc,
 	})
 }
 
 func (e *Event) Cancel() {
-	if e.Cancelled {
+	if e.cancelled {
 		return
 	}
-	e.Cancelled = true
-	e.raise(EventCancelledDomainEvent{EventID: e.ID})
+	e.cancelled = true
+	e.raise(EventCancelledDomainEvent{EventID: e.id})
 }
 
 func (e *Event) PaymentsRefunded() {
-	e.raise(EventPaymentsRefundedDomainEvent{EventID: e.ID})
+	e.raise(EventPaymentsRefundedDomainEvent{EventID: e.id})
 }
 
 func (e *Event) TicketsArchived() {
-	e.raise(EventTicketsArchivedDomainEvent{EventID: e.ID})
+	e.raise(EventTicketsArchivedDomainEvent{EventID: e.id})
 }

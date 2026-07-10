@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/llannillo/mm/internal/shared/events"
-	"github.com/llannillo/mm/modules/users/internal/domain"
 	store "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
+	"github.com/llannillo/mm/modules/users/internal/domain"
 )
 
 type UserRepository struct {
@@ -24,11 +24,11 @@ func NewUserRepository(q *store.Queries, d *events.Dispatcher) *UserRepository {
 
 func (r *UserRepository) Insert(ctx context.Context, u *domain.User) error {
 	_, err := r.queries.InsertUser(ctx, store.InsertUserParams{
-		ID:         u.ID,
-		Email:      u.Email,
-		FirstName:  u.FirstName,
-		LastName:   u.LastName,
-		IdentityID: u.IdentityID,
+		ID:         u.ID(),
+		Email:      u.Email(),
+		FirstName:  u.FirstName(),
+		LastName:   u.LastName(),
+		IdentityID: u.IdentityID(),
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -39,7 +39,7 @@ func (r *UserRepository) Insert(ctx context.Context, u *domain.User) error {
 	}
 
 	if err := r.queries.InsertUserRole(ctx, store.InsertUserRoleParams{
-		UserID:   u.ID,
+		UserID:   u.ID(),
 		RoleName: domain.RoleMember,
 	}); err != nil {
 		return fmt.Errorf("insert user role: %w", err)
@@ -67,9 +67,9 @@ func (r *UserRepository) Update(ctx context.Context, u *domain.User) error {
 		switch e.(type) {
 		case domain.UserProfileUpdatedDomainEvent:
 			err = r.queries.UpdateUserProfile(ctx, store.UpdateUserProfileParams{
-				ID:        u.ID,
-				FirstName: u.FirstName,
-				LastName:  u.LastName,
+				ID:        u.ID(),
+				FirstName: u.FirstName(),
+				LastName:  u.LastName(),
 			})
 		}
 		if err != nil {
@@ -82,11 +82,5 @@ func (r *UserRepository) Update(ctx context.Context, u *domain.User) error {
 }
 
 func rehydrateUser(row store.UsersUser) *domain.User {
-	return &domain.User{
-		ID:         row.ID,
-		Email:      row.Email,
-		FirstName:  row.FirstName,
-		LastName:   row.LastName,
-		IdentityID: row.IdentityID,
-	}
+	return domain.RehydrateUser(row.ID, row.Email, row.FirstName, row.LastName, row.IdentityID)
 }

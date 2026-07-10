@@ -21,16 +21,16 @@ func NewTicketRepository(q *store.Queries) *TicketRepository {
 }
 
 func (r *TicketRepository) Insert(ctx context.Context, t *domain.Ticket) error {
-	createdAtUtc := pgtype.Timestamptz{Time: t.CreatedAtUtc, Valid: true}
+	createdAtUtc := pgtype.Timestamptz{Time: t.CreatedAtUtc(), Valid: true}
 	err := r.queries.InsertTicket(ctx, store.InsertTicketParams{
-		ID:           t.ID,
-		CustomerID:   t.CustomerID,
-		OrderID:      t.OrderID,
-		EventID:      t.EventID,
-		TicketTypeID: t.TicketTypeID,
-		Code:         t.Code,
+		ID:           t.ID(),
+		CustomerID:   t.CustomerID(),
+		OrderID:      t.OrderID(),
+		EventID:      t.EventID(),
+		TicketTypeID: t.TicketTypeID(),
+		Code:         t.Code(),
 		CreatedAtUtc: createdAtUtc,
-		Archived:     t.Archived,
+		Archived:     t.Archived(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert ticket: %w", err)
@@ -47,14 +47,5 @@ func (r *TicketRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.T
 		}
 		return nil, fmt.Errorf("get ticket: %w", err)
 	}
-	return &domain.Ticket{
-		ID:           row.ID,
-		CustomerID:   row.CustomerID,
-		OrderID:      row.OrderID,
-		EventID:      row.EventID,
-		TicketTypeID: row.TicketTypeID,
-		Code:         row.Code,
-		CreatedAtUtc: row.CreatedAtUtc.Time,
-		Archived:     row.Archived,
-	}, nil
+	return domain.RehydrateTicket(row.ID, row.CustomerID, row.OrderID, row.EventID, row.TicketTypeID, row.Code, row.CreatedAtUtc.Time, row.Archived), nil
 }

@@ -7,6 +7,9 @@ import (
 
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
+	pgstore "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
+	httphandler "github.com/llannillo/mm/modules/ticketing/internal/adapters/driving/http"
 	ticketingapp "github.com/llannillo/mm/modules/ticketing/internal/app"
 	additemtocart "github.com/llannillo/mm/modules/ticketing/internal/app/commands/add_item_to_cart"
 	cancelevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/cancel_event"
@@ -17,10 +20,7 @@ import (
 	updatecustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_customer"
 	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
 	"github.com/llannillo/mm/modules/ticketing/internal/app/consumers"
-	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
-	pgstore "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
-	httphandler "github.com/llannillo/mm/modules/ticketing/internal/adapters/driving/http"
-	usersapi "github.com/llannillo/mm/modules/users/api"
+	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 )
 
 const moduleName = "ticketing"
@@ -47,8 +47,8 @@ func New(app shared.App) *Module {
 	createCustomerHandler := createcustomer.NewHandler(customerRepo)
 	updateCustomerHandler := updatecustomer.NewHandler(customerRepo)
 
-	eventbus.Subscribe[usersapi.UserRegisteredIntegrationEvent](app.EventBus, consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle)
-	eventbus.Subscribe[usersapi.UserProfileUpdatedIntegrationEvent](app.EventBus, consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle)
+	eventbus.Subscribe[usersintegrationevents.UserRegisteredIntegrationEvent](app.EventBus, consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle)
+	eventbus.Subscribe[usersintegrationevents.UserProfileUpdatedIntegrationEvent](app.EventBus, consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle)
 
 	_ = createevent.NewHandler(eventRepo, ticketTypeRepo)
 	_ = cancelevent.NewHandler(eventRepo)

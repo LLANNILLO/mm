@@ -42,10 +42,10 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) error {
 	}
 
 	item := domain.CartItem{
-		TicketTypeID: ticketType.ID,
+		TicketTypeID: ticketType.ID(),
 		Quantity:     cmd.Quantity,
-		Price:        ticketType.Price,
-		Currency:     ticketType.Currency,
+		Price:        ticketType.Price(),
+		Currency:     ticketType.Currency(),
 	}
 
 	if err := h.cartService.AddItem(ctx, cmd.CustomerID, item); err != nil {

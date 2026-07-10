@@ -12,9 +12,10 @@ import (
 	"github.com/llannillo/mm/internal/shared/auth"
 	"github.com/llannillo/mm/internal/shared/cache"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	usersapi "github.com/llannillo/mm/modules/users/api"
+	kc "github.com/llannillo/mm/modules/users/internal/adapters/driven/keycloak"
 	pg "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres"
 	pgstore "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
-	kc "github.com/llannillo/mm/modules/users/internal/adapters/driven/keycloak"
 	httphandler "github.com/llannillo/mm/modules/users/internal/adapters/driving/http"
 	registeruser "github.com/llannillo/mm/modules/users/internal/app/commands/register_user"
 	updateuser "github.com/llannillo/mm/modules/users/internal/app/commands/update_user"
@@ -23,7 +24,6 @@ import (
 	getuserperms "github.com/llannillo/mm/modules/users/internal/app/queries/get_user_permissions"
 	"github.com/llannillo/mm/modules/users/internal/domain"
 	"github.com/llannillo/mm/modules/users/internal/ports/inbound"
-	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
 const moduleName = "users"
@@ -62,7 +62,7 @@ func New(app shared.App) *Module {
 	}
 
 	permSvc := &permissionService{
-		handler: getuserperms.NewHandler(app.DB),
+		handler: getuserperms.NewHandler(pg.NewPermissionsReader(app.DB)),
 		cache:   app.Cache,
 	}
 
@@ -170,7 +170,7 @@ func (s *permissionService) GetUserPermissions(ctx context.Context, identityID s
 		}
 	}
 
-	result, err := s.handler.Handle(ctx, identityID)
+	result, err := s.handler.Handle(ctx, getuserperms.Query{IdentityID: identityID})
 	if err != nil {
 		return uuid.Nil, nil, err
 	}

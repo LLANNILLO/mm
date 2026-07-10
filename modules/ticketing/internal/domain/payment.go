@@ -8,58 +8,89 @@ import (
 
 type Payment struct {
 	entity
-	ID             uuid.UUID
-	OrderID        uuid.UUID
-	TransactionID  uuid.UUID
-	Amount         int64
-	Currency       string
-	AmountRefunded *int64
-	CreatedAtUtc   time.Time
-	RefundedAtUtc  *time.Time
+	id             uuid.UUID
+	orderID        uuid.UUID
+	transactionID  uuid.UUID
+	amount         int64
+	currency       string
+	amountRefunded *int64
+	createdAtUtc   time.Time
+	refundedAtUtc  *time.Time
 }
+
+func (p *Payment) ID() uuid.UUID             { return p.id }
+func (p *Payment) OrderID() uuid.UUID        { return p.orderID }
+func (p *Payment) TransactionID() uuid.UUID  { return p.transactionID }
+func (p *Payment) Amount() int64             { return p.amount }
+func (p *Payment) Currency() string          { return p.currency }
+func (p *Payment) AmountRefunded() *int64    { return p.amountRefunded }
+func (p *Payment) CreatedAtUtc() time.Time   { return p.createdAtUtc }
+func (p *Payment) RefundedAtUtc() *time.Time { return p.refundedAtUtc }
 
 func NewPayment(order *Order, transactionID uuid.UUID, amount int64, currency string) *Payment {
 	p := &Payment{
-		ID:            uuid.New(),
-		OrderID:       order.ID,
-		TransactionID: transactionID,
-		Amount:        amount,
-		Currency:      currency,
-		CreatedAtUtc:  time.Now().UTC(),
+		id:            uuid.New(),
+		orderID:       order.ID(),
+		transactionID: transactionID,
+		amount:        amount,
+		currency:      currency,
+		createdAtUtc:  time.Now().UTC(),
 	}
-	p.raise(PaymentCreatedDomainEvent{PaymentID: p.ID})
+	p.raise(PaymentCreatedDomainEvent{PaymentID: p.id})
 	return p
+}
+
+// RehydratePayment reconstructs a Payment from persisted state without
+// raising domain events. Only the PaymentRepository may call this.
+func RehydratePayment(
+	id, orderID, transactionID uuid.UUID,
+	amount int64,
+	currency string,
+	amountRefunded *int64,
+	createdAtUtc time.Time,
+	refundedAtUtc *time.Time,
+) *Payment {
+	return &Payment{
+		id:             id,
+		orderID:        orderID,
+		transactionID:  transactionID,
+		amount:         amount,
+		currency:       currency,
+		amountRefunded: amountRefunded,
+		createdAtUtc:   createdAtUtc,
+		refundedAtUtc:  refundedAtUtc,
+	}
 }
 
 func (p *Payment) Refund(amount int64) error {
 	currentRefunded := int64(0)
-	if p.AmountRefunded != nil {
-		currentRefunded = *p.AmountRefunded
+	if p.amountRefunded != nil {
+		currentRefunded = *p.amountRefunded
 	}
 
-	if currentRefunded >= p.Amount {
+	if currentRefunded >= p.amount {
 		return ErrPaymentAlreadyRefunded
 	}
 
-	if currentRefunded+amount > p.Amount {
+	if currentRefunded+amount > p.amount {
 		return ErrPaymentRefundExceedsAmount
 	}
 
 	newRefunded := currentRefunded + amount
-	p.AmountRefunded = &newRefunded
+	p.amountRefunded = &newRefunded
 
-	if newRefunded == p.Amount {
+	if newRefunded == p.amount {
 		now := time.Now().UTC()
-		p.RefundedAtUtc = &now
+		p.refundedAtUtc = &now
 		p.raise(PaymentRefundedDomainEvent{
-			PaymentID:     p.ID,
-			TransactionID: p.TransactionID,
+			PaymentID:     p.id,
+			TransactionID: p.transactionID,
 			Amount:        amount,
 		})
 	} else {
 		p.raise(PaymentPartiallyRefundedDomainEvent{
-			PaymentID:     p.ID,
-			TransactionID: p.TransactionID,
+			PaymentID:     p.id,
+			TransactionID: p.transactionID,
 			Amount:        amount,
 		})
 	}

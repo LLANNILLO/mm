@@ -30,5 +30,5 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) (uuid.UUID, error) {
 	if err := h.repo.Insert(ctx, user); err != nil {
 		return uuid.Nil, fmt.Errorf("register user: %w", err)
 	}
-	return user.ID, nil
+	return user.ID(), nil
 }

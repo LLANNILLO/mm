@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 	"github.com/llannillo/mm/modules/users/internal/domain"
-	usersapi "github.com/llannillo/mm/modules/users/api"
 )
 
 type UserProfileUpdatedHandler struct {
@@ -17,7 +17,7 @@ func NewUserProfileUpdatedHandler(eventBus eventbus.EventBus) *UserProfileUpdate
 }
 
 func (h *UserProfileUpdatedHandler) Handle(ctx context.Context, e domain.UserProfileUpdatedDomainEvent) error {
-	return h.eventBus.Publish(ctx, usersapi.UserProfileUpdatedIntegrationEvent{
+	return h.eventBus.Publish(ctx, usersintegrationevents.UserProfileUpdatedIntegrationEvent{
 		UserID:    e.UserID,
 		FirstName: e.FirstName,
 		LastName:  e.LastName,

@@ -28,5 +28,5 @@ func (h *Handler) Handle(ctx context.Context, cmd Command) (uuid.UUID, error) {
 	if err := h.repo.Insert(ctx, category); err != nil {
 		return uuid.Nil, err
 	}
-	return category.ID, nil
+	return category.ID(), nil
 }

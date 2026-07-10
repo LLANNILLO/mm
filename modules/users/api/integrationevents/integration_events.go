@@ -1,4 +1,8 @@
-package usersapi
+// Package integrationevents holds the Users module's public, asynchronous
+// contract. Other modules may depend on these types (via eventbus.Subscribe)
+// to react to what happened in Users, but must never depend on
+// modules/users/api's synchronous UsersAPI interface.
+package integrationevents
 
 import "github.com/google/uuid"
 
