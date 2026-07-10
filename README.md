@@ -37,8 +37,9 @@ Nothing outside a module can access its internals — Go's `internal/` package r
 ```
 modules/<module>/
 ├── api/
-│   ├── api.go                         ← public API interface (if module is consumed sync)
-│   └── integration_events.go          ← cross-module event contracts (async bus)
+│   ├── api.go                         ← public API interface (sync — kept for cases that need an inline result)
+│   └── integrationevents/
+│       └── integration_events.go      ← cross-module event contracts (async bus) — the only cross-module dependency an architecture test allows
 ├── module.go                          ← wiring + DI (only exported entry point)
 └── internal/
     ├── domain/                        ← entities, value objects, domain events, business rules
@@ -88,9 +89,11 @@ adapters/driving/http
 
 Modules communicate through two mechanisms, both defined in `modules/<module>/api/`:
 
-**Synchronous (in-process):** A module exposes an interface in `api/api.go`. Other modules depend on the interface, not the concrete implementation. Used when the caller needs a result inline (e.g. validating a resource exists before writing).
+**Synchronous (in-process):** A module exposes an interface in `api/api.go`. Other modules depend on the interface, not the concrete implementation. Used when the caller needs a result inline (e.g. validating a resource exists before writing). In practice, no module calls another module's sync API today — cross-module reads (`UsersAPI.GetUser`, `EventsAPI.GetTicketType`) were only ever self-implemented and never invoked externally, a leftover from before the project moved to the event bus. The interface is kept for the day a real inline cross-module call is needed, but the architecture tests forbid any *other* module from depending on it.
 
-**Asynchronous (event bus):** A module publishes Integration Events to a shared in-memory `EventBus`. Other modules subscribe consumers at startup. Integration event types are defined in `api/integration_events.go` of the publishing module.
+**Asynchronous (event bus):** A module publishes Integration Events to a shared in-memory `EventBus`. Other modules subscribe consumers at startup. Integration event types live in their own `api/integrationevents/` package — kept separate from `api/api.go` specifically so the architecture tests can allow-list "depend on the async contract" while still forbidding "depend on the sync interface" at the package level.
+
+**Enforced by tests:** `TestModuleIsolation_NoModuleDependsOnAnotherModule` (in `test/architecture/`) fails the build if any module imports another module's `internal/` packages or its `api` package directly — the only cross-module import allowed is `api/integrationevents`.
 
 ```
 Users module raises UserRegisteredDomainEvent
@@ -120,7 +123,31 @@ The `EventBus` lives in `internal/shared/eventbus/`. It is in-memory today — s
 
 **Domain events vs. integration events** — Domain events are internal to a module (raised by aggregates, dispatched post-persist via `events.Dispatcher`). Integration events are the module's public async contract. These two are intentionally separate types.
 
+**Encapsulated entities** — Every aggregate (`Event`, `Order`, `User`, ...) has unexported fields, exposed only through getter methods. There is no way to construct one outside its own package except through an exported `New<Type>` (enforces invariants) or `Rehydrate<Type>` (used only by the repository to reconstruct persisted state, no invariant checks, no domain events raised). This is Go's answer to C#'s "entities may only have a private constructor" rule — Go has no constructors, so the equivalent guarantee comes from field visibility instead.
+
 **Prices in minor units** — All monetary values are stored as `int64` (cents). `5000` = $50.00.
+
+---
+
+## Architecture tests
+
+`test/architecture/` is the Go port of the C# course's `Evently.ArchitectureTests` (NetArchTest). Go has no runtime IL to reflect over, so the suite is built on `go/packages` + `go/types` instead — it parses and type-checks every package in the module and inspects the resulting import graph and type declarations statically. Run it like any other test:
+
+```bash
+go test ./test/architecture/...
+```
+
+What it enforces, one file per concern:
+
+| File | Enforces |
+|---|---|
+| `module_isolation_test.go` | A module may depend on another module's `api/integrationevents` package only — never its `internal/` packages, never its synchronous `api` package. |
+| `layers_test.go` | Hexagonal dependency direction within a module: `domain` has zero internal dependencies; `app` depends on `domain`/`ports` but never `adapters`; `adapters/driving` and `adapters/driven` never depend on each other. A second check denies importing concrete infra packages (`pgx`, `pgxpool`, `database/sql`, `valkey-go`) straight from `app`/`domain`, since a local-path check alone can't see a leak coming through a third-party driver. |
+| `domain_test.go` | Every entity has zero exported fields plus an exported `New<Type>`/`Rehydrate<Type>` pair; every type implementing `events.DomainEvent` is named `*DomainEvent`. |
+| `application_test.go` | Every `commands/*`/`queries/*` package exposes `Command`/`Query` + `Handler` + `NewHandler`; `Handler` has no exported fields; any `Validate` method is exactly `func() error`. |
+| `presentation_test.go` | Any type that subscribes to the event bus (has a `Handle` method, lives in an `app/consumers` package) is named `*Consumer`. |
+
+Some C# NetArchTest rules have no Go equivalent and are intentionally not ported: "sealed" doesn't exist because Go structs cannot be subclassed at all, and Go's own `internal/` visibility rule already makes cross-module internal imports a compile error — the test suite only needs to guard what the compiler *can't* see (the public `api` surface, and layer leaks through third-party packages).
 
 ---
 
