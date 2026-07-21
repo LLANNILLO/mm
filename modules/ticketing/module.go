@@ -9,6 +9,7 @@ import (
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/eventbus"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/inbox"
 	"github.com/llannillo/mm/internal/shared/outbox"
 	"github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/payments"
 	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
@@ -117,8 +118,14 @@ func New(app shared.App) *Module {
 	createCustomerHandler := createcustomer.NewHandler(customerRepo)
 	updateCustomerHandler := updatecustomer.NewHandler(customerRepo)
 
-	eventbus.Subscribe[usersintegrationevents.UserRegisteredIntegrationEvent](app.EventBus, consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle)
-	eventbus.Subscribe[usersintegrationevents.UserProfileUpdatedIntegrationEvent](app.EventBus, consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle)
+	eventbus.Subscribe[usersintegrationevents.UserRegisteredIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"UserRegisteredConsumer", app.DB, schema,
+		consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle,
+	))
+	eventbus.Subscribe[usersintegrationevents.UserProfileUpdatedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"UserProfileUpdatedConsumer", app.DB, schema,
+		consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle,
+	))
 
 	// Replica-sync commands — see the registry comment above for why these
 	// stay unwired until the EDA phase.

@@ -170,5 +170,5 @@ func (w *Worker) handle(ctx context.Context, m pendingMessage) error {
 	if err != nil {
 		return err
 	}
-	return w.dispatcher.Dispatch(WithMessageID(ctx, m.ID), []events.DomainEvent{domainEvent})
+	return w.dispatcher.Dispatch(events.WithMessageID(ctx, m.ID), []events.DomainEvent{domainEvent})
 }

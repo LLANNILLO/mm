@@ -29,7 +29,7 @@ func Idempotent[T events.DomainEvent](
 	inner func(ctx context.Context, event T) error,
 ) func(ctx context.Context, event T) error {
 	return func(ctx context.Context, event T) error {
-		messageID, ok := MessageIDFromContext(ctx)
+		messageID, ok := events.MessageIDFromContext(ctx)
 		if !ok {
 			return fmt.Errorf(
 				"outbox: missing message id in context for handler %q — Idempotent must be called from the outbox worker",
