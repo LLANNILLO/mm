@@ -8,15 +8,17 @@ import (
 )
 
 type Handler struct {
-	carts inbound.CartService
+	carts  inbound.CartService
+	orders inbound.OrderService
 }
 
-func NewHandler(carts inbound.CartService) *Handler {
-	return &Handler{carts: carts}
+func NewHandler(carts inbound.CartService, orders inbound.OrderService) *Handler {
+	return &Handler{carts: carts, orders: orders}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /carts/add", h.addToCart)
+	mux.HandleFunc("POST /orders", h.createOrder)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -85,6 +85,13 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+// ProcessOnce claims and dispatches a single batch immediately, without
+// waiting for the next tick. Useful for manually flushing the outbox (ops
+// tooling, tests) outside the normal polling cadence.
+func (w *Worker) ProcessOnce(ctx context.Context) error {
+	return w.processBatch(ctx)
+}
+
 type pendingMessage struct {
 	ID      uuid.UUID
 	Type    string

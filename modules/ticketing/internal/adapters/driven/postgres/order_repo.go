@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
@@ -25,6 +26,8 @@ func NewOrderRepository(q *store.Queries, uow *UnitOfWork) *OrderRepository {
 func (r *OrderRepository) Create(ctx context.Context, order *domain.Order) error {
 	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
 		q := r.queries.WithTx(tx)
+
+		var domainEvents []events.DomainEvent
 
 		// For each order item: lock the ticket_type row, validate and decrement available_quantity
 		for _, item := range order.Items() {
@@ -44,11 +47,15 @@ func (r *OrderRepository) Create(ctx context.Context, order *domain.Order) error
 				return domain.ErrTicketTypeInsufficientQuantity
 			}
 
-			if err := q.DecrementTicketTypeQuantity(ctx, store.DecrementTicketTypeQuantityParams{
+			remaining, err := q.DecrementTicketTypeQuantity(ctx, store.DecrementTicketTypeQuantityParams{
 				AvailableQuantity: item.Quantity(),
 				ID:                item.TicketTypeID(),
-			}); err != nil {
+			})
+			if err != nil {
 				return fmt.Errorf("decrement ticket type quantity: %w", err)
+			}
+			if remaining == 0 {
+				domainEvents = append(domainEvents, domain.TicketTypeSoldOutDomainEvent{TicketTypeID: item.TicketTypeID()})
 			}
 		}
 
@@ -81,7 +88,7 @@ func (r *OrderRepository) Create(ctx context.Context, order *domain.Order) error
 			}
 		}
 
-		domainEvents := order.DomainEvents()
+		domainEvents = append(domainEvents, order.DomainEvents()...)
 		order.ClearDomainEvents()
 		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
@@ -91,10 +98,20 @@ func (r *OrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Or
 	row, err := r.queries.GetOrderByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("order not found")
+			return nil, domain.ErrOrderNotFound
 		}
 		return nil, fmt.Errorf("get order: %w", err)
 	}
+
+	itemRows, err := r.queries.GetOrderItemsByOrderID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get order items: %w", err)
+	}
+	items := make([]domain.OrderItem, 0, len(itemRows))
+	for _, ir := range itemRows {
+		items = append(items, domain.RehydrateOrderItem(ir.ID, ir.OrderID, ir.TicketTypeID, ir.Quantity, ir.UnitPrice, ir.Price, ir.Currency))
+	}
+
 	return domain.RehydrateOrder(
 		row.ID,
 		row.CustomerID,
@@ -103,6 +120,85 @@ func (r *OrderRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Or
 		row.Currency,
 		row.TicketsIssued,
 		row.CreatedAtUtc.Time,
-		nil,
+		items,
 	), nil
+}
+
+// IssueTickets creates one Ticket per unit of quantity across the order's
+// items and marks the order as having its tickets issued — atomically, in a
+// single transaction. Called by the OrderCreated domain event handler.
+func (r *OrderRepository) IssueTickets(ctx context.Context, orderID uuid.UUID) error {
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		orderRow, err := q.GetOrderByID(ctx, orderID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrOrderNotFound
+			}
+			return fmt.Errorf("get order: %w", err)
+		}
+
+		itemRows, err := q.GetOrderItemsByOrderID(ctx, orderID)
+		if err != nil {
+			return fmt.Errorf("get order items: %w", err)
+		}
+		items := make([]domain.OrderItem, 0, len(itemRows))
+		for _, ir := range itemRows {
+			items = append(items, domain.RehydrateOrderItem(ir.ID, ir.OrderID, ir.TicketTypeID, ir.Quantity, ir.UnitPrice, ir.Price, ir.Currency))
+		}
+
+		order := domain.RehydrateOrder(
+			orderRow.ID, orderRow.CustomerID, domain.OrderStatus(orderRow.Status),
+			orderRow.TotalPrice, orderRow.Currency, orderRow.TicketsIssued, orderRow.CreatedAtUtc.Time, items,
+		)
+
+		if err := order.IssueTickets(); err != nil {
+			if errors.Is(err, domain.ErrOrderTicketsAlreadyIssued) {
+				return nil
+			}
+			return err
+		}
+
+		var tickets []*domain.Ticket
+		for _, item := range order.Items() {
+			ttRow, err := q.GetTicketTypeByID(ctx, item.TicketTypeID())
+			if err != nil {
+				return fmt.Errorf("get ticket type %s: %w", item.TicketTypeID(), err)
+			}
+			ticketType := domain.RehydrateTicketType(
+				ttRow.ID, ttRow.EventID, ttRow.Name, ttRow.Price, ttRow.Currency, ttRow.Quantity, ttRow.AvailableQuantity,
+			)
+
+			for i := int64(0); i < item.Quantity(); i++ {
+				tickets = append(tickets, domain.NewTicket(order, ticketType))
+			}
+		}
+
+		for _, t := range tickets {
+			ticketCreatedAtUtc := pgtype.Timestamptz{Time: t.CreatedAtUtc(), Valid: true}
+			if err := q.InsertTicket(ctx, store.InsertTicketParams{
+				ID:           t.ID(),
+				CustomerID:   t.CustomerID(),
+				OrderID:      t.OrderID(),
+				EventID:      t.EventID(),
+				TicketTypeID: t.TicketTypeID(),
+				Code:         t.Code(),
+				CreatedAtUtc: ticketCreatedAtUtc,
+				Archived:     t.Archived(),
+			}); err != nil {
+				return fmt.Errorf("insert ticket: %w", err)
+			}
+		}
+
+		if err := q.UpdateOrderTicketsIssued(ctx, orderID); err != nil {
+			return fmt.Errorf("mark tickets issued: %w", err)
+		}
+
+		domainEvents := append([]events.DomainEvent{}, order.DomainEvents()...)
+		for _, t := range tickets {
+			domainEvents = append(domainEvents, t.DomainEvents()...)
+		}
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
+	})
 }

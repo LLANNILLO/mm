@@ -5,9 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	sharedevents "github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/internal/shared/outbox"
+	"github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/payments"
 	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
 	pgstore "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/ticketing/internal/adapters/driving/http"
@@ -21,6 +24,7 @@ import (
 	updatecustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_customer"
 	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
 	"github.com/llannillo/mm/modules/ticketing/internal/app/consumers"
+	eventhandlers "github.com/llannillo/mm/modules/ticketing/internal/app/event_handlers"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 )
@@ -48,12 +52,43 @@ func New(app shared.App) *Module {
 	_ = ticketRepo
 	_ = paymentRepo
 
-	// No intra-module domain event handlers exist yet for Order/Ticket/Payment
-	// flows (order fulfillment isn't wired end-to-end — see create_order,
-	// create_event etc. below, also discarded via `_`). The outbox still
-	// records and marks these events processed; Dispatch is a documented
-	// no-op for types with zero registered handlers. Register the types now
-	// so the worker can decode them once handlers land.
+	paymentGateway := payments.NewFakeGateway(app.Logger)
+
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"OrderCreatedHandler", app.DB, schema,
+		eventhandlers.NewOrderCreatedHandler(orderRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"ArchiveTicketsHandler", app.DB, schema,
+		eventhandlers.NewArchiveTicketsHandler(eventRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"RefundPaymentsHandler", app.DB, schema,
+		eventhandlers.NewRefundPaymentsHandler(eventRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"PaymentRefundedHandler", app.DB, schema,
+		eventhandlers.NewPaymentRefundedHandler(paymentGateway).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"PaymentPartiallyRefundedHandler", app.DB, schema,
+		eventhandlers.NewPaymentPartiallyRefundedHandler(paymentGateway).Handle,
+	))
+
+	// Every domain event type this module can raise must be registered here so
+	// the worker can decode it, even ones with no handler today:
+	//  - EventRescheduledDomainEvent, TicketTypeSoldOutDomainEvent,
+	//    OrderTicketsIssuedDomainEvent, TicketCreatedDomainEvent,
+	//    TicketArchivedDomainEvent, PaymentCreatedDomainEvent: in the C#
+	//    reference these only republish as integration events for other
+	//    modules to consume — nothing consumes them here, so no handler is
+	//    registered (Dispatch to zero handlers is a documented no-op).
+	//  - EventCancelledDomainEvent is only ever raised by Event.Cancel(),
+	//    called from cancel_event's command handler below, which is itself
+	//    unreachable until Events -> Ticketing integration-event consumers
+	//    exist (deferred to the EDA phase). ArchiveTicketsHandler and
+	//    RefundPaymentsHandler are wired and correct — they just have no
+	//    live trigger yet.
 	registry := outbox.NewTypeRegistry()
 	outbox.RegisterType[domain.EventCancelledDomainEvent](registry)
 	outbox.RegisterType[domain.EventRescheduledDomainEvent](registry)
@@ -85,10 +120,11 @@ func New(app shared.App) *Module {
 	eventbus.Subscribe[usersintegrationevents.UserRegisteredIntegrationEvent](app.EventBus, consumers.NewUserRegisteredConsumer(createCustomerHandler).Handle)
 	eventbus.Subscribe[usersintegrationevents.UserProfileUpdatedIntegrationEvent](app.EventBus, consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle)
 
+	// Replica-sync commands — see the registry comment above for why these
+	// stay unwired until the EDA phase.
 	_ = createevent.NewHandler(eventRepo, ticketTypeRepo)
 	_ = cancelevent.NewHandler(eventRepo)
 	_ = rescheduleevent.NewHandler(eventRepo)
-	_ = createorder.NewHandler(ticketTypeRepo, orderRepo)
 	_ = updatetickettypeprice.NewHandler(ticketTypeRepo)
 
 	carts := &cartServiceImpl{
@@ -96,8 +132,13 @@ func New(app shared.App) *Module {
 		addItemToCart: additemtocart.NewHandler(cartService, customerRepo, ticketTypeRepo),
 	}
 
+	orders := &orderServiceImpl{
+		log:         app.Logger,
+		createOrder: createorder.NewHandler(ticketTypeRepo, orderRepo),
+	}
+
 	return &Module{
-		handler:      httphandler.NewHandler(carts),
+		handler:      httphandler.NewHandler(carts, orders),
 		outboxWorker: outboxWorker,
 	}
 }
@@ -133,4 +174,16 @@ func (s *cartServiceImpl) AddItemToCart(ctx context.Context, cmd additemtocart.C
 	err := s.addItemToCart.Handle(ctx, cmd)
 	done(err)
 	return err
+}
+
+type orderServiceImpl struct {
+	log         *slog.Logger
+	createOrder *createorder.Handler
+}
+
+func (s *orderServiceImpl) CreateOrder(ctx context.Context, cmd createorder.Command) (uuid.UUID, error) {
+	done := logHandler(s.log, ctx, "CreateOrder")
+	id, err := s.createOrder.Handle(ctx, cmd)
+	done(err)
+	return id, err
 }

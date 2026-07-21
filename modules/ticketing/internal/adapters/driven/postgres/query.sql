@@ -49,10 +49,11 @@ UPDATE ticketing.ticket_types
 SET price = $1
 WHERE id = $2;
 
--- name: DecrementTicketTypeQuantity :exec
+-- name: DecrementTicketTypeQuantity :one
 UPDATE ticketing.ticket_types
 SET available_quantity = available_quantity - $1
-WHERE id = $2;
+WHERE id = $2
+RETURNING available_quantity;
 
 -- Orders
 
@@ -69,6 +70,16 @@ SELECT id, customer_id, status, total_price, currency, tickets_issued, created_a
 FROM ticketing.orders
 WHERE id = $1;
 
+-- name: GetOrderItemsByOrderID :many
+SELECT id, order_id, ticket_type_id, quantity, unit_price, price, currency
+FROM ticketing.order_items
+WHERE order_id = $1;
+
+-- name: UpdateOrderTicketsIssued :exec
+UPDATE ticketing.orders
+SET tickets_issued = TRUE
+WHERE id = $1;
+
 -- Tickets
 
 -- name: InsertTicket :exec
@@ -78,6 +89,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 -- name: GetTicketByID :one
 SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived
 FROM ticketing.tickets
+WHERE id = $1;
+
+-- name: GetTicketsByEventID :many
+SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived
+FROM ticketing.tickets
+WHERE event_id = $1 AND archived = FALSE;
+
+-- name: UpdateTicketArchived :exec
+UPDATE ticketing.tickets
+SET archived = TRUE
 WHERE id = $1;
 
 -- Payments
@@ -90,3 +111,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
 SELECT id, order_id, transaction_id, amount, currency, amount_refunded, created_at_utc, refunded_at_utc
 FROM ticketing.payments
 WHERE id = $1;
+
+-- name: GetPaymentsByEventID :many
+SELECT DISTINCT p.id, p.order_id, p.transaction_id, p.amount, p.currency, p.amount_refunded, p.created_at_utc, p.refunded_at_utc
+FROM ticketing.payments p
+JOIN ticketing.orders o ON o.id = p.order_id
+JOIN ticketing.order_items oi ON oi.order_id = o.id
+JOIN ticketing.ticket_types tt ON tt.id = oi.ticket_type_id
+WHERE tt.event_id = $1
+  AND (p.amount_refunded IS NULL OR p.amount_refunded < p.amount);
+
+-- name: UpdatePaymentRefund :exec
+UPDATE ticketing.payments
+SET amount_refunded = $1, refunded_at_utc = $2
+WHERE id = $3;
