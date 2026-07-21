@@ -7,16 +7,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 )
 
 type TicketTypeRepository struct {
 	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewTicketTypeRepository(q *store.Queries) *TicketTypeRepository {
-	return &TicketTypeRepository{queries: q}
+func NewTicketTypeRepository(q *store.Queries, uow *UnitOfWork) *TicketTypeRepository {
+	return &TicketTypeRepository{queries: q, uow: uow}
 }
 
 func (r *TicketTypeRepository) Insert(ctx context.Context, tt *domain.TicketType) error {
@@ -56,13 +58,18 @@ func (r *TicketTypeRepository) GetByID(ctx context.Context, id uuid.UUID) (*doma
 }
 
 func (r *TicketTypeRepository) Update(ctx context.Context, tt *domain.TicketType) error {
-	err := r.queries.UpdateTicketTypePrice(ctx, store.UpdateTicketTypePriceParams{
-		Price: tt.Price(),
-		ID:    tt.ID(),
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		if err := q.UpdateTicketTypePrice(ctx, store.UpdateTicketTypePriceParams{
+			Price: tt.Price(),
+			ID:    tt.ID(),
+		}); err != nil {
+			return fmt.Errorf("update ticket type price: %w", err)
+		}
+
+		domainEvents := tt.DomainEvents()
+		tt.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
-	if err != nil {
-		return fmt.Errorf("update ticket type price: %w", err)
-	}
-	tt.ClearDomainEvents()
-	return nil
 }

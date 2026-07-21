@@ -12,6 +12,7 @@ import (
 	"github.com/llannillo/mm/internal/shared/auth"
 	"github.com/llannillo/mm/internal/shared/cache"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	usersapi "github.com/llannillo/mm/modules/users/api"
 	kc "github.com/llannillo/mm/modules/users/internal/adapters/driven/keycloak"
 	pg "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres"
@@ -30,22 +31,44 @@ const moduleName = "users"
 
 const permissionsTTL = 5 * time.Minute
 
+const schema = "users"
+
 type Module struct {
 	handler      *httphandler.Handler
 	getUserQuery *getuser.Handler
 	permSvc      *permissionService
+	outboxWorker *outbox.Worker
 }
 
 func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
 
-	userRepo := pg.NewUserRepository(queries, app.Dispatcher)
+	userRepo := pg.NewUserRepository(queries, pg.NewUnitOfWork(app.DB))
 	userReader := pg.NewUserReader(queries)
 
 	getUserHandler := getuser.NewHandler(userReader)
 
-	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserRegisteredHandler(getUserHandler, app.EventBus).Handle)
-	sharedevents.Register(app.Dispatcher, eventhandlers.NewUserProfileUpdatedHandler(app.EventBus).Handle)
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"UserRegisteredHandler", app.DB, schema,
+		eventhandlers.NewUserRegisteredHandler(getUserHandler, app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"UserProfileUpdatedHandler", app.DB, schema,
+		eventhandlers.NewUserProfileUpdatedHandler(app.EventBus).Handle,
+	))
+
+	registry := outbox.NewTypeRegistry()
+	outbox.RegisterType[domain.UserRegisteredDomainEvent](registry)
+	outbox.RegisterType[domain.UserProfileUpdatedDomainEvent](registry)
+
+	outboxWorker := outbox.NewWorker(
+		app.DB, schema, moduleName, app.Dispatcher, registry,
+		outbox.Config{
+			IntervalSeconds: app.Config.Users.Outbox.IntervalSeconds,
+			BatchSize:       app.Config.Users.Outbox.BatchSize,
+		},
+		app.Logger,
+	)
 
 	keycloakClient := kc.NewClient(kc.Config{
 		AdminURL:                 app.Config.Users.Keycloak.AdminURL,
@@ -70,7 +93,14 @@ func New(app shared.App) *Module {
 		handler:      httphandler.NewHandler(users),
 		getUserQuery: getUserHandler,
 		permSvc:      permSvc,
+		outboxWorker: outboxWorker,
 	}
+}
+
+// RunOutbox polls and dispatches this module's outbox messages until ctx is
+// cancelled. Meant to be launched in its own goroutine at startup.
+func (m *Module) RunOutbox(ctx context.Context) {
+	m.outboxWorker.Run(ctx)
 }
 
 // PermissionService returns the auth.PermissionService backed by Valkey cache + Postgres.

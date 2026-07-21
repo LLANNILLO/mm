@@ -8,35 +8,42 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 )
 
 type TicketRepository struct {
 	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewTicketRepository(q *store.Queries) *TicketRepository {
-	return &TicketRepository{queries: q}
+func NewTicketRepository(q *store.Queries, uow *UnitOfWork) *TicketRepository {
+	return &TicketRepository{queries: q, uow: uow}
 }
 
 func (r *TicketRepository) Insert(ctx context.Context, t *domain.Ticket) error {
-	createdAtUtc := pgtype.Timestamptz{Time: t.CreatedAtUtc(), Valid: true}
-	err := r.queries.InsertTicket(ctx, store.InsertTicketParams{
-		ID:           t.ID(),
-		CustomerID:   t.CustomerID(),
-		OrderID:      t.OrderID(),
-		EventID:      t.EventID(),
-		TicketTypeID: t.TicketTypeID(),
-		Code:         t.Code(),
-		CreatedAtUtc: createdAtUtc,
-		Archived:     t.Archived(),
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		createdAtUtc := pgtype.Timestamptz{Time: t.CreatedAtUtc(), Valid: true}
+		if err := q.InsertTicket(ctx, store.InsertTicketParams{
+			ID:           t.ID(),
+			CustomerID:   t.CustomerID(),
+			OrderID:      t.OrderID(),
+			EventID:      t.EventID(),
+			TicketTypeID: t.TicketTypeID(),
+			Code:         t.Code(),
+			CreatedAtUtc: createdAtUtc,
+			Archived:     t.Archived(),
+		}); err != nil {
+			return fmt.Errorf("insert ticket: %w", err)
+		}
+
+		domainEvents := t.DomainEvents()
+		t.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
-	if err != nil {
-		return fmt.Errorf("insert ticket: %w", err)
-	}
-	t.ClearDomainEvents()
-	return nil
 }
 
 func (r *TicketRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ticket, error) {

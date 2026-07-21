@@ -7,6 +7,7 @@ import (
 
 	"github.com/llannillo/mm/internal/shared"
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	pg "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres"
 	pgstore "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	httphandler "github.com/llannillo/mm/modules/ticketing/internal/adapters/driving/http"
@@ -20,27 +21,61 @@ import (
 	updatecustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_customer"
 	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
 	"github.com/llannillo/mm/modules/ticketing/internal/app/consumers"
+	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 )
 
 const moduleName = "ticketing"
 
+const schema = "ticketing"
+
 type Module struct {
-	handler *httphandler.Handler
+	handler      *httphandler.Handler
+	outboxWorker *outbox.Worker
 }
 
 func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
+	uow := pg.NewUnitOfWork(app.DB)
 
 	customerRepo := pg.NewCustomerRepository(queries)
-	eventRepo := pg.NewEventRepository(queries)
-	ticketTypeRepo := pg.NewTicketTypeRepository(queries)
-	orderRepo := pg.NewOrderRepository(app.DB, queries)
-	ticketRepo := pg.NewTicketRepository(queries)
-	paymentRepo := pg.NewPaymentRepository(queries)
+	eventRepo := pg.NewEventRepository(queries, uow)
+	ticketTypeRepo := pg.NewTicketTypeRepository(queries, uow)
+	orderRepo := pg.NewOrderRepository(queries, uow)
+	ticketRepo := pg.NewTicketRepository(queries, uow)
+	paymentRepo := pg.NewPaymentRepository(queries, uow)
 
 	_ = ticketRepo
 	_ = paymentRepo
+
+	// No intra-module domain event handlers exist yet for Order/Ticket/Payment
+	// flows (order fulfillment isn't wired end-to-end — see create_order,
+	// create_event etc. below, also discarded via `_`). The outbox still
+	// records and marks these events processed; Dispatch is a documented
+	// no-op for types with zero registered handlers. Register the types now
+	// so the worker can decode them once handlers land.
+	registry := outbox.NewTypeRegistry()
+	outbox.RegisterType[domain.EventCancelledDomainEvent](registry)
+	outbox.RegisterType[domain.EventRescheduledDomainEvent](registry)
+	outbox.RegisterType[domain.EventPaymentsRefundedDomainEvent](registry)
+	outbox.RegisterType[domain.EventTicketsArchivedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketTypeSoldOutDomainEvent](registry)
+	outbox.RegisterType[domain.OrderCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.OrderTicketsIssuedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketArchivedDomainEvent](registry)
+	outbox.RegisterType[domain.PaymentCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.PaymentRefundedDomainEvent](registry)
+	outbox.RegisterType[domain.PaymentPartiallyRefundedDomainEvent](registry)
+
+	outboxWorker := outbox.NewWorker(
+		app.DB, schema, moduleName, app.Dispatcher, registry,
+		outbox.Config{
+			IntervalSeconds: app.Config.Ticketing.Outbox.IntervalSeconds,
+			BatchSize:       app.Config.Ticketing.Outbox.BatchSize,
+		},
+		app.Logger,
+	)
 
 	cartService := ticketingapp.NewCartService(app.Cache)
 
@@ -62,8 +97,15 @@ func New(app shared.App) *Module {
 	}
 
 	return &Module{
-		handler: httphandler.NewHandler(carts),
+		handler:      httphandler.NewHandler(carts),
+		outboxWorker: outboxWorker,
 	}
+}
+
+// RunOutbox polls and dispatches this module's outbox messages until ctx is
+// cancelled. Meant to be launched in its own goroutine at startup.
+func (m *Module) RunOutbox(ctx context.Context) {
+	m.outboxWorker.Run(ctx)
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {

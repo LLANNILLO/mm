@@ -9,16 +9,18 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 )
 
 type EventRepository struct {
 	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewEventRepository(q *store.Queries) *EventRepository {
-	return &EventRepository{queries: q}
+func NewEventRepository(q *store.Queries, uow *UnitOfWork) *EventRepository {
+	return &EventRepository{queries: q, uow: uow}
 }
 
 func (r *EventRepository) Insert(ctx context.Context, e *domain.Event) error {
@@ -61,27 +63,33 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ev
 }
 
 func (r *EventRepository) Update(ctx context.Context, e *domain.Event) error {
-	for _, ev := range e.DomainEvents() {
-		switch ev.(type) {
-		case domain.EventRescheduledDomainEvent:
-			startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc(), Valid: true}
-			endsAtUtc := pgtype.Timestamptz{}
-			if e.EndsAtUtc() != nil {
-				endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc(), Valid: true}
-			}
-			if err := r.queries.UpdateEventSchedule(ctx, store.UpdateEventScheduleParams{
-				StartsAtUtc: startsAtUtc,
-				EndsAtUtc:   endsAtUtc,
-				ID:          e.ID(),
-			}); err != nil {
-				return fmt.Errorf("update event schedule: %w", err)
-			}
-		case domain.EventCancelledDomainEvent:
-			if err := r.queries.CancelEvent(ctx, e.ID()); err != nil {
-				return fmt.Errorf("cancel event: %w", err)
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		for _, ev := range e.DomainEvents() {
+			switch ev.(type) {
+			case domain.EventRescheduledDomainEvent:
+				startsAtUtc := pgtype.Timestamptz{Time: e.StartsAtUtc(), Valid: true}
+				endsAtUtc := pgtype.Timestamptz{}
+				if e.EndsAtUtc() != nil {
+					endsAtUtc = pgtype.Timestamptz{Time: *e.EndsAtUtc(), Valid: true}
+				}
+				if err := q.UpdateEventSchedule(ctx, store.UpdateEventScheduleParams{
+					StartsAtUtc: startsAtUtc,
+					EndsAtUtc:   endsAtUtc,
+					ID:          e.ID(),
+				}); err != nil {
+					return fmt.Errorf("update event schedule: %w", err)
+				}
+			case domain.EventCancelledDomainEvent:
+				if err := q.CancelEvent(ctx, e.ID()); err != nil {
+					return fmt.Errorf("cancel event: %w", err)
+				}
 			}
 		}
-	}
-	e.ClearDomainEvents()
-	return nil
+
+		domainEvents := e.DomainEvents()
+		e.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
+	})
 }

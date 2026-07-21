@@ -7,35 +7,40 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 )
 
 type TicketTypeRepository struct {
-	queries    *store.Queries
-	dispatcher *events.Dispatcher
+	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewTicketTypeRepository(q *store.Queries, d *events.Dispatcher) *TicketTypeRepository {
-	return &TicketTypeRepository{queries: q, dispatcher: d}
+func NewTicketTypeRepository(q *store.Queries, uow *UnitOfWork) *TicketTypeRepository {
+	return &TicketTypeRepository{queries: q, uow: uow}
 }
 
 func (r *TicketTypeRepository) Insert(ctx context.Context, tt *domain.TicketType) error {
-	_, err := r.queries.InsertTicketType(ctx, store.InsertTicketTypeParams{
-		ID:       tt.ID(),
-		EventID:  tt.EventID(),
-		Name:     tt.Name(),
-		Price:    tt.Price(),
-		Currency: tt.Currency(),
-		Quantity: tt.Quantity(),
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		_, err := q.InsertTicketType(ctx, store.InsertTicketTypeParams{
+			ID:       tt.ID(),
+			EventID:  tt.EventID(),
+			Name:     tt.Name(),
+			Price:    tt.Price(),
+			Currency: tt.Currency(),
+			Quantity: tt.Quantity(),
+		})
+		if err != nil {
+			return fmt.Errorf("insert ticket type: %w", err)
+		}
+
+		domainEvents := tt.DomainEvents()
+		tt.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
-	if err != nil {
-		return fmt.Errorf("insert ticket type: %w", err)
-	}
-	domainEvents := tt.DomainEvents()
-	tt.ClearDomainEvents()
-	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
 
 func (r *TicketTypeRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.TicketType, error) {
@@ -50,22 +55,27 @@ func (r *TicketTypeRepository) GetByID(ctx context.Context, id uuid.UUID) (*doma
 }
 
 func (r *TicketTypeRepository) Update(ctx context.Context, tt *domain.TicketType) error {
-	for _, e := range tt.DomainEvents() {
-		var err error
-		switch e.(type) {
-		case domain.TicketTypePriceChangedDomainEvent:
-			err = r.queries.UpdateTicketTypePrice(ctx, store.UpdateTicketTypePriceParams{
-				ID:    tt.ID(),
-				Price: tt.Price(),
-			})
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		for _, e := range tt.DomainEvents() {
+			var err error
+			switch e.(type) {
+			case domain.TicketTypePriceChangedDomainEvent:
+				err = q.UpdateTicketTypePrice(ctx, store.UpdateTicketTypePriceParams{
+					ID:    tt.ID(),
+					Price: tt.Price(),
+				})
+			}
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return err
-		}
-	}
-	domainEvents := tt.DomainEvents()
-	tt.ClearDomainEvents()
-	return r.dispatcher.Dispatch(ctx, domainEvents)
+
+		domainEvents := tt.DomainEvents()
+		tt.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
+	})
 }
 
 func (r *TicketTypeRepository) ExistsByEventID(ctx context.Context, eventID uuid.UUID) (bool, error) {
