@@ -7,37 +7,42 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/events/internal/domain"
 )
 
 type EventRepository struct {
-	queries    *store.Queries
-	dispatcher *events.Dispatcher
+	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewEventRepository(q *store.Queries, d *events.Dispatcher) *EventRepository {
-	return &EventRepository{queries: q, dispatcher: d}
+func NewEventRepository(q *store.Queries, uow *UnitOfWork) *EventRepository {
+	return &EventRepository{queries: q, uow: uow}
 }
 
 func (r *EventRepository) Insert(ctx context.Context, event *domain.Event) error {
-	_, err := r.queries.InsertEvent(ctx, store.InsertEventParams{
-		ID:          event.ID(),
-		CategoryID:  event.CategoryID(),
-		Title:       event.Title(),
-		Description: event.Description(),
-		Location:    event.Location(),
-		StartsAtUtc: event.StartsAtUtc(),
-		EndsAtUtc:   event.EndsAtUtc(),
-		Status:      event.Status(),
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		_, err := q.InsertEvent(ctx, store.InsertEventParams{
+			ID:          event.ID(),
+			CategoryID:  event.CategoryID(),
+			Title:       event.Title(),
+			Description: event.Description(),
+			Location:    event.Location(),
+			StartsAtUtc: event.StartsAtUtc(),
+			EndsAtUtc:   event.EndsAtUtc(),
+			Status:      event.Status(),
+		})
+		if err != nil {
+			return fmt.Errorf("insert event: %w", err)
+		}
+
+		domainEvents := event.DomainEvents()
+		event.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
-	if err != nil {
-		return fmt.Errorf("insert event: %w", err)
-	}
-	domainEvents := event.DomainEvents()
-	event.ClearDomainEvents()
-	return r.dispatcher.Dispatch(ctx, domainEvents)
 }
 
 func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Event, error) {
@@ -52,27 +57,32 @@ func (r *EventRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Ev
 }
 
 func (r *EventRepository) Update(ctx context.Context, event *domain.Event) error {
-	for _, e := range event.DomainEvents() {
-		var err error
-		switch e.(type) {
-		case domain.EventCancelledDomainEvent:
-			err = r.queries.UCancelEvent(ctx, event.ID())
-		case domain.EventPublishedDomainEvent:
-			err = r.queries.UPublishEvent(ctx, event.ID())
-		case domain.EventRescheduledDomainEvent:
-			err = r.queries.URescheduleEvent(ctx, store.URescheduleEventParams{
-				ID:         event.ID(),
-				StartsDate: event.StartsAtUtc(),
-				EndsDate:   event.EndsAtUtc(),
-			})
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
+
+		for _, e := range event.DomainEvents() {
+			var err error
+			switch e.(type) {
+			case domain.EventCancelledDomainEvent:
+				err = q.UCancelEvent(ctx, event.ID())
+			case domain.EventPublishedDomainEvent:
+				err = q.UPublishEvent(ctx, event.ID())
+			case domain.EventRescheduledDomainEvent:
+				err = q.URescheduleEvent(ctx, store.URescheduleEventParams{
+					ID:         event.ID(),
+					StartsDate: event.StartsAtUtc(),
+					EndsDate:   event.EndsAtUtc(),
+				})
+			}
+			if err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return err
-		}
-	}
-	domainEvents := event.DomainEvents()
-	event.ClearDomainEvents()
-	return r.dispatcher.Dispatch(ctx, domainEvents)
+
+		domainEvents := event.DomainEvents()
+		event.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
+	})
 }
 
 func rehydrateEvent(row store.SelectEventForUpdateRow) *domain.Event {

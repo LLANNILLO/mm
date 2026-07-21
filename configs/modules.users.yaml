@@ -4,3 +4,6 @@ users:
     token_url: "http://evently.identity:8080/realms/evently/protocol/openid-connect/token"
     confidential_client_id: "evently-confidential-client"
     confidential_client_secret: "uRiWNNNu8YFtHQwkMwd14gmEN4akYIr5"
+  outbox:
+    interval_seconds: 10
+    batch_size: 20

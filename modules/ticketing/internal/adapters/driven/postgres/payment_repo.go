@@ -9,46 +9,53 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	store "github.com/llannillo/mm/modules/ticketing/internal/adapters/driven/postgres/generated"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
 )
 
 type PaymentRepository struct {
 	queries *store.Queries
+	uow     *UnitOfWork
 }
 
-func NewPaymentRepository(q *store.Queries) *PaymentRepository {
-	return &PaymentRepository{queries: q}
+func NewPaymentRepository(q *store.Queries, uow *UnitOfWork) *PaymentRepository {
+	return &PaymentRepository{queries: q, uow: uow}
 }
 
 func (r *PaymentRepository) Insert(ctx context.Context, p *domain.Payment) error {
-	createdAtUtc := pgtype.Timestamptz{Time: p.CreatedAtUtc(), Valid: true}
+	return r.uow.WithTx(ctx, func(tx pgx.Tx) error {
+		q := r.queries.WithTx(tx)
 
-	amountRefunded := pgtype.Int8{}
-	if p.AmountRefunded() != nil {
-		amountRefunded = pgtype.Int8{Int64: *p.AmountRefunded(), Valid: true}
-	}
+		createdAtUtc := pgtype.Timestamptz{Time: p.CreatedAtUtc(), Valid: true}
 
-	refundedAtUtc := pgtype.Timestamptz{}
-	if p.RefundedAtUtc() != nil {
-		refundedAtUtc = pgtype.Timestamptz{Time: *p.RefundedAtUtc(), Valid: true}
-	}
+		amountRefunded := pgtype.Int8{}
+		if p.AmountRefunded() != nil {
+			amountRefunded = pgtype.Int8{Int64: *p.AmountRefunded(), Valid: true}
+		}
 
-	err := r.queries.InsertPayment(ctx, store.InsertPaymentParams{
-		ID:             p.ID(),
-		OrderID:        p.OrderID(),
-		TransactionID:  p.TransactionID(),
-		Amount:         p.Amount(),
-		Currency:       p.Currency(),
-		AmountRefunded: amountRefunded,
-		CreatedAtUtc:   createdAtUtc,
-		RefundedAtUtc:  refundedAtUtc,
+		refundedAtUtc := pgtype.Timestamptz{}
+		if p.RefundedAtUtc() != nil {
+			refundedAtUtc = pgtype.Timestamptz{Time: *p.RefundedAtUtc(), Valid: true}
+		}
+
+		if err := q.InsertPayment(ctx, store.InsertPaymentParams{
+			ID:             p.ID(),
+			OrderID:        p.OrderID(),
+			TransactionID:  p.TransactionID(),
+			Amount:         p.Amount(),
+			Currency:       p.Currency(),
+			AmountRefunded: amountRefunded,
+			CreatedAtUtc:   createdAtUtc,
+			RefundedAtUtc:  refundedAtUtc,
+		}); err != nil {
+			return fmt.Errorf("insert payment: %w", err)
+		}
+
+		domainEvents := p.DomainEvents()
+		p.ClearDomainEvents()
+		return outbox.InsertMessages(ctx, tx, schema, domainEvents)
 	})
-	if err != nil {
-		return fmt.Errorf("insert payment: %w", err)
-	}
-	p.ClearDomainEvents()
-	return nil
 }
 
 func (r *PaymentRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.Payment, error) {

@@ -7,8 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const schema = "events"
-
 type UnitOfWork struct {
 	pool *pgxpool.Pool
 }

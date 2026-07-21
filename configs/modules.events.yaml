@@ -1,1 +1,5 @@
-events: {}
+events:
+  outbox:
+    interval_seconds: 10
+    batch_size: 20
+

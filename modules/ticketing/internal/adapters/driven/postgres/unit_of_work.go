@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const schema = "events"
+const schema = "ticketing"
 
 type UnitOfWork struct {
 	pool *pgxpool.Pool

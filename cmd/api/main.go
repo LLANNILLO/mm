@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +29,9 @@ func main() {
 	if env == "" {
 		env = "development"
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	cfg, err := shared.LoadConfig(env, []string{"events", "users", "ticketing"})
 	if err != nil {
@@ -93,11 +100,28 @@ func main() {
 	ticketingModule.RegisterRoutes(mux)
 	usersModule.RegisterRoutes(mux)
 
+	go eventsModule.RunOutbox(ctx)
+	go ticketingModule.RunOutbox(ctx)
+	go usersModule.RunOutbox(ctx)
+
 	handler := middleware.Recovery(logger)(middleware.RequestLogging(logger)(mux))
 	if tokenVerifier != nil {
 		handler = middleware.Authentication(tokenVerifier, usersModule.PermissionService())(handler)
 	}
 
+	server := &http.Server{Addr: ":8080", Handler: handler}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("graceful shutdown failed", "error", err)
+		}
+	}()
+
 	logger.Info("listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal(err)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/llannillo/mm/internal/shared"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/outbox"
 	archivecategory "github.com/llannillo/mm/modules/events/internal/app/commands/archive_category"
 	cancelevent "github.com/llannillo/mm/modules/events/internal/app/commands/cancel_event"
 	createcategory "github.com/llannillo/mm/modules/events/internal/app/commands/create_category"
@@ -35,20 +36,47 @@ import (
 
 const moduleName = "events"
 
+const schema = "events"
+
 type Module struct {
 	handler            *httphandler.Handler
 	getTicketTypeQuery *gettickettype.Handler
+	outboxWorker       *outbox.Worker
 }
 
 func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
-	sharedevents.Register(app.Dispatcher, eventhandlers.HandleEventRescheduled)
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"HandleEventRescheduled", app.DB, schema,
+		eventhandlers.HandleEventRescheduled,
+	))
 
-	eventRepo := pg.NewEventRepository(queries, app.Dispatcher)
-	categoryRepo := pg.NewCategoryRepository(queries, app.Dispatcher)
-	ticketTypeRepo := pg.NewTicketTypeRepository(queries, app.Dispatcher)
+	registry := outbox.NewTypeRegistry()
+	outbox.RegisterType[domain.EventCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.EventPublishedDomainEvent](registry)
+	outbox.RegisterType[domain.EventCancelledDomainEvent](registry)
+	outbox.RegisterType[domain.EventRescheduledDomainEvent](registry)
+	outbox.RegisterType[domain.CategoryCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.CategoryArchivedDomainEvent](registry)
+	outbox.RegisterType[domain.CategoryNameChangedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketTypeCreatedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketTypePriceChangedDomainEvent](registry)
+
+	outboxWorker := outbox.NewWorker(
+		app.DB, schema, moduleName, app.Dispatcher, registry,
+		outbox.Config{
+			IntervalSeconds: app.Config.Events.Outbox.IntervalSeconds,
+			BatchSize:       app.Config.Events.Outbox.BatchSize,
+		},
+		app.Logger,
+	)
+
+	uow := pg.NewUnitOfWork(app.DB)
+	eventRepo := pg.NewEventRepository(queries, uow)
+	categoryRepo := pg.NewCategoryRepository(queries, uow)
+	ticketTypeRepo := pg.NewTicketTypeRepository(queries, uow)
 
 	eventReader := pg.NewEventReader(queries)
 	categoryReader := pg.NewCategoryReader(queries)
@@ -87,7 +115,14 @@ func New(app shared.App) *Module {
 	return &Module{
 		handler:            httphandler.NewHandler(events, categories, tickets),
 		getTicketTypeQuery: getTicketTypeHandler,
+		outboxWorker:       outboxWorker,
 	}
+}
+
+// RunOutbox polls and dispatches this module's outbox messages until ctx is
+// cancelled. Meant to be launched in its own goroutine at startup.
+func (m *Module) RunOutbox(ctx context.Context) {
+	m.outboxWorker.Run(ctx)
 }
 
 // GetTicketType implements eventsapi.EventsAPI — allows other modules to query ticket types.
