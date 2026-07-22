@@ -10,4 +10,5 @@ import (
 type TicketRepository interface {
 	Insert(ctx context.Context, ticket *domain.Ticket) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Ticket, error)
+	Update(ctx context.Context, ticket *domain.Ticket) error
 }

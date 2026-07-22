@@ -17,10 +17,10 @@ type EventRescheduledDomainEvent struct {
 type EventPaymentsRefundedDomainEvent struct{ EventID uuid.UUID }
 type EventTicketsArchivedDomainEvent struct{ EventID uuid.UUID }
 
-func (EventCancelledDomainEvent) IsDomainEvent()          {}
-func (EventRescheduledDomainEvent) IsDomainEvent()        {}
-func (EventPaymentsRefundedDomainEvent) IsDomainEvent()   {}
-func (EventTicketsArchivedDomainEvent) IsDomainEvent()    {}
+func (EventCancelledDomainEvent) IsDomainEvent()        {}
+func (EventRescheduledDomainEvent) IsDomainEvent()      {}
+func (EventPaymentsRefundedDomainEvent) IsDomainEvent() {}
+func (EventTicketsArchivedDomainEvent) IsDomainEvent()  {}
 
 // TicketType domain events
 
@@ -38,14 +38,34 @@ func (OrderTicketsIssuedDomainEvent) IsDomainEvent() {}
 
 // Ticket domain events
 
-type TicketCreatedDomainEvent struct{ TicketID uuid.UUID }
+type TicketCreatedDomainEvent struct {
+	TicketID uuid.UUID
+	EventID  uuid.UUID
+}
 type TicketArchivedDomainEvent struct {
 	TicketID uuid.UUID
 	Code     string
 }
+type TicketCheckedInDomainEvent struct {
+	TicketID uuid.UUID
+	EventID  uuid.UUID
+}
+type TicketCheckInDuplicateDomainEvent struct {
+	TicketID uuid.UUID
+	EventID  uuid.UUID
+	Code     string
+}
+type TicketCheckInInvalidDomainEvent struct {
+	TicketID uuid.UUID
+	EventID  uuid.UUID
+	Code     string
+}
 
-func (TicketCreatedDomainEvent) IsDomainEvent()  {}
-func (TicketArchivedDomainEvent) IsDomainEvent() {}
+func (TicketCreatedDomainEvent) IsDomainEvent()          {}
+func (TicketArchivedDomainEvent) IsDomainEvent()         {}
+func (TicketCheckedInDomainEvent) IsDomainEvent()        {}
+func (TicketCheckInDuplicateDomainEvent) IsDomainEvent() {}
+func (TicketCheckInInvalidDomainEvent) IsDomainEvent()   {}
 
 // Payment domain events
 
@@ -61,6 +81,6 @@ type PaymentPartiallyRefundedDomainEvent struct {
 	Amount        int64
 }
 
-func (PaymentCreatedDomainEvent) IsDomainEvent()            {}
-func (PaymentRefundedDomainEvent) IsDomainEvent()           {}
-func (PaymentPartiallyRefundedDomainEvent) IsDomainEvent()  {}
+func (PaymentCreatedDomainEvent) IsDomainEvent()           {}
+func (PaymentRefundedDomainEvent) IsDomainEvent()          {}
+func (PaymentPartiallyRefundedDomainEvent) IsDomainEvent() {}

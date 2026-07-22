@@ -83,16 +83,16 @@ WHERE id = $1;
 -- Tickets
 
 -- name: InsertTicket :exec
-INSERT INTO ticketing.tickets (id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO ticketing.tickets (id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived, used_at_utc)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
 -- name: GetTicketByID :one
-SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived
+SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived, used_at_utc
 FROM ticketing.tickets
 WHERE id = $1;
 
 -- name: GetTicketsByEventID :many
-SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived
+SELECT id, customer_id, order_id, event_id, ticket_type_id, code, created_at_utc, archived, used_at_utc
 FROM ticketing.tickets
 WHERE event_id = $1 AND archived = FALSE;
 
@@ -100,6 +100,43 @@ WHERE event_id = $1 AND archived = FALSE;
 UPDATE ticketing.tickets
 SET archived = TRUE
 WHERE id = $1;
+
+-- name: UpdateTicketCheckedIn :exec
+UPDATE ticketing.tickets
+SET used_at_utc = $1
+WHERE id = $2;
+
+-- Event Statistics
+
+-- name: EnsureEventStatisticsRow :exec
+INSERT INTO ticketing.event_statistics (event_id)
+VALUES ($1)
+ON CONFLICT (event_id) DO NOTHING;
+
+-- name: IncrementEventStatisticsTicketsSold :exec
+UPDATE ticketing.event_statistics
+SET tickets_sold = tickets_sold + 1
+WHERE event_id = $1;
+
+-- name: IncrementEventStatisticsAttendeesCheckedIn :exec
+UPDATE ticketing.event_statistics
+SET attendees_checked_in = attendees_checked_in + 1
+WHERE event_id = $1;
+
+-- name: AppendEventStatisticsDuplicateCheckIn :exec
+UPDATE ticketing.event_statistics
+SET duplicate_check_in_tickets = array_append(duplicate_check_in_tickets, sqlc.arg(ticket_code)::text)
+WHERE event_id = sqlc.arg(event_id);
+
+-- name: AppendEventStatisticsInvalidCheckIn :exec
+UPDATE ticketing.event_statistics
+SET invalid_check_in_tickets = array_append(invalid_check_in_tickets, sqlc.arg(ticket_code)::text)
+WHERE event_id = sqlc.arg(event_id);
+
+-- name: GetEventStatisticsByEventID :one
+SELECT event_id, tickets_sold, attendees_checked_in, duplicate_check_in_tickets, invalid_check_in_tickets
+FROM ticketing.event_statistics
+WHERE event_id = $1;
 
 -- Payments
 

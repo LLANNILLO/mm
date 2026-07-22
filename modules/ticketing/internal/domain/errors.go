@@ -44,7 +44,10 @@ var (
 	ErrOrderNotFound             = &DomainError{Code: "order.not_found", Message: "order not found", Kind: KindNotFound}
 	ErrOrderTicketsAlreadyIssued = &DomainError{Code: "order.tickets_already_issued", Message: "tickets have already been issued for this order", Kind: KindConflict}
 
-	ErrTicketAlreadyArchived = &DomainError{Code: "ticket.already_archived", Message: "ticket is already archived", Kind: KindConflict}
+	ErrTicketAlreadyArchived   = &DomainError{Code: "ticket.already_archived", Message: "ticket is already archived", Kind: KindConflict}
+	ErrTicketCheckInInvalid    = &DomainError{Code: "ticket.check_in_invalid", Message: "ticket does not belong to this customer", Kind: KindValidation}
+	ErrTicketAlreadyCheckedIn  = &DomainError{Code: "ticket.already_checked_in", Message: "ticket has already been checked in", Kind: KindConflict}
+	ErrEventStatisticsNotFound = &DomainError{Code: "event_statistics.not_found", Message: "no statistics found for this event", Kind: KindNotFound}
 
 	ErrPaymentAlreadyRefunded     = &DomainError{Code: "payment.already_refunded", Message: "payment has already been fully refunded", Kind: KindConflict}
 	ErrPaymentRefundExceedsAmount = &DomainError{Code: "payment.refund_exceeds_amount", Message: "refund amount exceeds payment amount", Kind: KindValidation}

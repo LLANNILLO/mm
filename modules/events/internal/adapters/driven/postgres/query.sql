@@ -114,3 +114,19 @@ UPDATE events.ticket_types
 SET price = @price
 WHERE id = $1;
 
+-- Cancel Event Saga
+
+-- name: StartCancelEventSaga :exec
+INSERT INTO events.cancel_event_saga_state (event_id)
+VALUES ($1)
+ON CONFLICT (event_id) DO NOTHING;
+
+-- name: MarkCancelEventSagaStepComplete :one
+UPDATE events.cancel_event_saga_state
+SET completed_steps = completed_steps | sqlc.arg(step)::smallint
+WHERE event_id = sqlc.arg(event_id)
+RETURNING completed_steps;
+
+-- name: DeleteCancelEventSagaState :exec
+DELETE FROM events.cancel_event_saga_state WHERE event_id = $1;
+

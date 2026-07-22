@@ -17,6 +17,7 @@ type Ticket struct {
 	code         string
 	createdAtUtc time.Time
 	archived     bool
+	usedAtUtc    *time.Time
 }
 
 func (t *Ticket) ID() uuid.UUID           { return t.id }
@@ -27,6 +28,7 @@ func (t *Ticket) TicketTypeID() uuid.UUID { return t.ticketTypeID }
 func (t *Ticket) Code() string            { return t.code }
 func (t *Ticket) CreatedAtUtc() time.Time { return t.createdAtUtc }
 func (t *Ticket) Archived() bool          { return t.archived }
+func (t *Ticket) UsedAtUtc() *time.Time   { return t.usedAtUtc }
 
 func NewTicket(order *Order, ticketType *TicketType) *Ticket {
 	t := &Ticket{
@@ -39,7 +41,7 @@ func NewTicket(order *Order, ticketType *TicketType) *Ticket {
 		createdAtUtc: time.Now().UTC(),
 		archived:     false,
 	}
-	t.raise(TicketCreatedDomainEvent{TicketID: t.id})
+	t.raise(TicketCreatedDomainEvent{TicketID: t.id, EventID: t.eventID})
 	return t
 }
 
@@ -50,6 +52,7 @@ func RehydrateTicket(
 	code string,
 	createdAtUtc time.Time,
 	archived bool,
+	usedAtUtc *time.Time,
 ) *Ticket {
 	return &Ticket{
 		id:           id,
@@ -60,6 +63,7 @@ func RehydrateTicket(
 		code:         code,
 		createdAtUtc: createdAtUtc,
 		archived:     archived,
+		usedAtUtc:    usedAtUtc,
 	}
 }
 
@@ -69,4 +73,24 @@ func (t *Ticket) Archive() {
 	}
 	t.archived = true
 	t.raise(TicketArchivedDomainEvent{TicketID: t.id, Code: t.code})
+}
+
+// CheckIn marks the ticket as used by customerID. Unlike Archive, it raises a
+// domain event on every outcome — including the two failure paths — because
+// the materialized event_statistics view counts invalid/duplicate attempts,
+// not just successes. Callers must persist the ticket even when CheckIn
+// returns an error, or the event never reaches the outbox.
+func (t *Ticket) CheckIn(customerID uuid.UUID) error {
+	if t.customerID != customerID {
+		t.raise(TicketCheckInInvalidDomainEvent{TicketID: t.id, EventID: t.eventID, Code: t.code})
+		return ErrTicketCheckInInvalid
+	}
+	if t.usedAtUtc != nil {
+		t.raise(TicketCheckInDuplicateDomainEvent{TicketID: t.id, EventID: t.eventID, Code: t.code})
+		return ErrTicketAlreadyCheckedIn
+	}
+	now := time.Now().UTC()
+	t.usedAtUtc = &now
+	t.raise(TicketCheckedInDomainEvent{TicketID: t.id, EventID: t.eventID})
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	ticketingapp "github.com/llannillo/mm/modules/ticketing/internal/app"
 	additemtocart "github.com/llannillo/mm/modules/ticketing/internal/app/commands/add_item_to_cart"
 	cancelevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/cancel_event"
+	checkinticket "github.com/llannillo/mm/modules/ticketing/internal/app/commands/check_in_ticket"
 	createcustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_customer"
 	createevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_event"
 	createorder "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_order"
@@ -26,7 +27,10 @@ import (
 	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
 	"github.com/llannillo/mm/modules/ticketing/internal/app/consumers"
 	eventhandlers "github.com/llannillo/mm/modules/ticketing/internal/app/event_handlers"
+	geteventstatistics "github.com/llannillo/mm/modules/ticketing/internal/app/queries/get_event_statistics"
 	"github.com/llannillo/mm/modules/ticketing/internal/domain"
+
+	eventsintegrationevents "github.com/llannillo/mm/modules/events/api/integrationevents"
 	usersintegrationevents "github.com/llannillo/mm/modules/users/api/integrationevents"
 )
 
@@ -49,8 +53,9 @@ func New(app shared.App) *Module {
 	orderRepo := pg.NewOrderRepository(queries, uow)
 	ticketRepo := pg.NewTicketRepository(queries, uow)
 	paymentRepo := pg.NewPaymentRepository(queries, uow)
+	statsRepo := pg.NewEventStatisticsRepository(queries)
+	statsReader := pg.NewEventStatisticsReader(queries)
 
-	_ = ticketRepo
 	_ = paymentRepo
 
 	paymentGateway := payments.NewFakeGateway(app.Logger)
@@ -75,21 +80,48 @@ func New(app shared.App) *Module {
 		"PaymentPartiallyRefundedHandler", app.DB, schema,
 		eventhandlers.NewPaymentPartiallyRefundedHandler(paymentGateway).Handle,
 	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketCreatedStatisticsHandler", app.DB, schema,
+		eventhandlers.NewTicketCreatedStatisticsHandler(statsRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketCheckedInStatisticsHandler", app.DB, schema,
+		eventhandlers.NewTicketCheckedInStatisticsHandler(statsRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketCheckInDuplicateStatisticsHandler", app.DB, schema,
+		eventhandlers.NewTicketCheckInDuplicateStatisticsHandler(statsRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketCheckInInvalidStatisticsHandler", app.DB, schema,
+		eventhandlers.NewTicketCheckInInvalidStatisticsHandler(statsRepo).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"PaymentsRefundedIntegrationEventPublisher", app.DB, schema,
+		eventhandlers.NewPaymentsRefundedIntegrationEventPublisher(app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketsArchivedIntegrationEventPublisher", app.DB, schema,
+		eventhandlers.NewTicketsArchivedIntegrationEventPublisher(app.EventBus).Handle,
+	))
 
 	// Every domain event type this module can raise must be registered here so
 	// the worker can decode it, even ones with no handler today:
 	//  - EventRescheduledDomainEvent, TicketTypeSoldOutDomainEvent,
-	//    OrderTicketsIssuedDomainEvent, TicketCreatedDomainEvent,
-	//    TicketArchivedDomainEvent, PaymentCreatedDomainEvent: in the C#
-	//    reference these only republish as integration events for other
-	//    modules to consume — nothing consumes them here, so no handler is
-	//    registered (Dispatch to zero handlers is a documented no-op).
-	//  - EventCancelledDomainEvent is only ever raised by Event.Cancel(),
-	//    called from cancel_event's command handler below, which is itself
-	//    unreachable until Events -> Ticketing integration-event consumers
-	//    exist (deferred to the EDA phase). ArchiveTicketsHandler and
-	//    RefundPaymentsHandler are wired and correct — they just have no
-	//    live trigger yet.
+	//    OrderTicketsIssuedDomainEvent, TicketArchivedDomainEvent,
+	//    PaymentCreatedDomainEvent: in the C# reference these only republish
+	//    as integration events for other modules to consume — nothing
+	//    consumes them here, so no handler is registered (Dispatch to zero
+	//    handlers is a documented no-op).
+	//  - EventCancelledDomainEvent is raised by Event.Cancel(), called from
+	//    cancel_event's command handler, now reachable via
+	//    EventCancellationStartedConsumer below (the cancel-event saga's
+	//    "started" step, published by modules/events). ArchiveTicketsHandler
+	//    and RefundPaymentsHandler fire from it, and their own completion
+	//    events now feed the two IntegrationEventPublisher handlers above,
+	//    closing the loop back to the saga.
+	//  - TicketCreatedDomainEvent now also feeds TicketCreatedStatisticsHandler
+	//    (the event_statistics materialized view's first in-module consumer).
 	registry := outbox.NewTypeRegistry()
 	outbox.RegisterType[domain.EventCancelledDomainEvent](registry)
 	outbox.RegisterType[domain.EventRescheduledDomainEvent](registry)
@@ -100,6 +132,9 @@ func New(app shared.App) *Module {
 	outbox.RegisterType[domain.OrderTicketsIssuedDomainEvent](registry)
 	outbox.RegisterType[domain.TicketCreatedDomainEvent](registry)
 	outbox.RegisterType[domain.TicketArchivedDomainEvent](registry)
+	outbox.RegisterType[domain.TicketCheckedInDomainEvent](registry)
+	outbox.RegisterType[domain.TicketCheckInDuplicateDomainEvent](registry)
+	outbox.RegisterType[domain.TicketCheckInInvalidDomainEvent](registry)
 	outbox.RegisterType[domain.PaymentCreatedDomainEvent](registry)
 	outbox.RegisterType[domain.PaymentRefundedDomainEvent](registry)
 	outbox.RegisterType[domain.PaymentPartiallyRefundedDomainEvent](registry)
@@ -127,10 +162,15 @@ func New(app shared.App) *Module {
 		consumers.NewUserProfileUpdatedConsumer(updateCustomerHandler).Handle,
 	))
 
+	cancelEventHandler := cancelevent.NewHandler(eventRepo)
+	eventbus.Subscribe[eventsintegrationevents.EventCancellationStartedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"EventCancellationStartedConsumer", app.DB, schema,
+		consumers.NewEventCancellationStartedConsumer(cancelEventHandler).Handle,
+	))
+
 	// Replica-sync commands — see the registry comment above for why these
 	// stay unwired until the EDA phase.
 	_ = createevent.NewHandler(eventRepo, ticketTypeRepo)
-	_ = cancelevent.NewHandler(eventRepo)
 	_ = rescheduleevent.NewHandler(eventRepo)
 	_ = updatetickettypeprice.NewHandler(ticketTypeRepo)
 
@@ -144,8 +184,14 @@ func New(app shared.App) *Module {
 		createOrder: createorder.NewHandler(ticketTypeRepo, orderRepo),
 	}
 
+	tickets := &ticketServiceImpl{
+		log:                app.Logger,
+		checkIn:            checkinticket.NewHandler(ticketRepo),
+		getEventStatistics: geteventstatistics.NewHandler(statsReader),
+	}
+
 	return &Module{
-		handler:      httphandler.NewHandler(carts, orders),
+		handler:      httphandler.NewHandler(carts, orders, tickets),
 		outboxWorker: outboxWorker,
 	}
 }
@@ -193,4 +239,24 @@ func (s *orderServiceImpl) CreateOrder(ctx context.Context, cmd createorder.Comm
 	id, err := s.createOrder.Handle(ctx, cmd)
 	done(err)
 	return id, err
+}
+
+type ticketServiceImpl struct {
+	log                *slog.Logger
+	checkIn            *checkinticket.Handler
+	getEventStatistics *geteventstatistics.Handler
+}
+
+func (s *ticketServiceImpl) CheckIn(ctx context.Context, cmd checkinticket.Command) error {
+	done := logHandler(s.log, ctx, "CheckIn")
+	err := s.checkIn.Handle(ctx, cmd)
+	done(err)
+	return err
+}
+
+func (s *ticketServiceImpl) GetEventStatistics(ctx context.Context, q geteventstatistics.Query) (*geteventstatistics.Response, error) {
+	done := logHandler(s.log, ctx, "GetEventStatistics")
+	resp, err := s.getEventStatistics.Handle(ctx, q)
+	done(err)
+	return resp, err
 }

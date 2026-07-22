@@ -121,7 +121,7 @@ func (r *EventRepository) ArchiveTickets(ctx context.Context, eventID uuid.UUID)
 
 		var domainEvents []events.DomainEvent
 		for _, tr := range ticketRows {
-			ticket := domain.RehydrateTicket(tr.ID, tr.CustomerID, tr.OrderID, tr.EventID, tr.TicketTypeID, tr.Code, tr.CreatedAtUtc.Time, tr.Archived)
+			ticket := rehydrateTicketingTicket(tr)
 			ticket.Archive()
 
 			if err := q.UpdateTicketArchived(ctx, ticket.ID()); err != nil {

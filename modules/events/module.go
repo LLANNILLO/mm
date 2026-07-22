@@ -8,8 +8,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/llannillo/mm/internal/shared"
+	"github.com/llannillo/mm/internal/shared/eventbus"
 	sharedevents "github.com/llannillo/mm/internal/shared/events"
+	"github.com/llannillo/mm/internal/shared/inbox"
 	"github.com/llannillo/mm/internal/shared/outbox"
+	eventsapi "github.com/llannillo/mm/modules/events/api"
+	"github.com/llannillo/mm/modules/events/api/integrationevents"
+	pg "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres"
+	pgstore "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
+	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
 	archivecategory "github.com/llannillo/mm/modules/events/internal/app/commands/archive_category"
 	cancelevent "github.com/llannillo/mm/modules/events/internal/app/commands/cancel_event"
 	createcategory "github.com/llannillo/mm/modules/events/internal/app/commands/create_category"
@@ -27,11 +34,9 @@ import (
 	listevents "github.com/llannillo/mm/modules/events/internal/app/queries/list_events"
 	listtickettype "github.com/llannillo/mm/modules/events/internal/app/queries/list_ticket_types"
 	searchevents "github.com/llannillo/mm/modules/events/internal/app/queries/search_events"
-	pg "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres"
-	pgstore "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
-	httphandler "github.com/llannillo/mm/modules/events/internal/adapters/driving/http"
+	eventcancellation "github.com/llannillo/mm/modules/events/internal/app/sagas/event_cancellation"
 	"github.com/llannillo/mm/modules/events/internal/domain"
-	eventsapi "github.com/llannillo/mm/modules/events/api"
+	ticketingintegrationevents "github.com/llannillo/mm/modules/ticketing/api/integrationevents"
 )
 
 const moduleName = "events"
@@ -51,6 +56,10 @@ func New(app shared.App) *Module {
 	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
 		"HandleEventRescheduled", app.DB, schema,
 		eventhandlers.HandleEventRescheduled,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"EventCancelledHandler", app.DB, schema,
+		eventhandlers.NewEventCancelledHandler(app.EventBus).Handle,
 	))
 
 	registry := outbox.NewTypeRegistry()
@@ -81,6 +90,21 @@ func New(app shared.App) *Module {
 	eventReader := pg.NewEventReader(queries)
 	categoryReader := pg.NewCategoryReader(queries)
 	ticketTypeReader := pg.NewTicketTypeReader(queries)
+
+	sagaRepo := pg.NewCancelEventSagaRepository(queries)
+
+	eventbus.Subscribe[integrationevents.EventCanceledIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"CancelEventSagaStartedHandler", app.DB, schema,
+		eventcancellation.NewStartedHandler(sagaRepo, app.EventBus).Handle,
+	))
+	eventbus.Subscribe[ticketingintegrationevents.EventPaymentsRefundedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"CancelEventSagaPaymentsRefundedHandler", app.DB, schema,
+		eventcancellation.NewPaymentsRefundedHandler(sagaRepo, app.EventBus).Handle,
+	))
+	eventbus.Subscribe[ticketingintegrationevents.EventTicketsArchivedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"CancelEventSagaTicketsArchivedHandler", app.DB, schema,
+		eventcancellation.NewTicketsArchivedHandler(sagaRepo, app.EventBus).Handle,
+	))
 
 	events := &eventService{
 		log:             app.Logger,
