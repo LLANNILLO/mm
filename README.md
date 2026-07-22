@@ -219,7 +219,84 @@ users:
 
 ### Database tables
 
-`outbox_messages` / `outbox_message_consumers` exist in the `events`, `users`, and `ticketing` schemas. `inbox_message_consumers` exists only in `ticketing` today — it's the only module currently subscribed to another module's integration events. See [Database](#database) for the full column layout.
+`outbox_messages` / `outbox_message_consumers` exist in the `events`, `users`, and `ticketing` schemas. `inbox_message_consumers` exists in `events` and `ticketing` — every module that subscribes to another module's integration events gets one. See [Database](#database) for the full column layout.
+
+---
+
+## Materialized View: Event Statistics
+
+Answering "how many tickets were sold, how many attendees checked in, how many check-in attempts failed" for an event would otherwise mean joining `tickets` against `orders` and scanning check-in state at read time. Instead, `ticketing.event_statistics` is a denormalized read model kept in sync by projection handlers reacting to the same ticket domain events that already flow through the outbox — no new dispatch mechanism, just handlers that write to a different table than the one that raised the event.
+
+```
+Ticket domain events                             (already raised by NewTicket / Ticket.CheckIn)
+        │
+        ▼  outbox.Worker ticks — same mechanism as any other handler
+TicketCreatedStatisticsHandler          → EnsureRow + IncrementTicketsSold
+TicketCheckedInStatisticsHandler        → IncrementAttendeesCheckedIn
+TicketCheckInDuplicateStatisticsHandler → AppendDuplicateCheckIn(ticket code)
+TicketCheckInInvalidStatisticsHandler   → AppendInvalidCheckIn(ticket code)
+        │
+        ▼
+ticketing.event_statistics (event_id, tickets_sold, attendees_checked_in,
+                             duplicate_check_in_tickets[], invalid_check_in_tickets[])
+        │
+        ▼  read side bypasses the domain and the aggregate entirely
+GET /events/{id}/statistics → GetEventStatisticsByEventID (sqlc, no joins)
+```
+
+`Ticket.CheckIn(customerID)` (`modules/ticketing/internal/domain/ticket.go`) is the one domain method worth calling out here: unlike `Archive()`, it raises a domain event on **every** outcome, including the two failure paths (wrong customer, already used) — the whole point of this view is counting failed attempts too, not just successes. `event_statistics` deliberately stores counts only, not the event's title/location the C# reference denormalizes alongside them: `ticketing.events` is itself an unwired replica outside of the [cancel-event flow](#saga-pattern-cancel-event-orchestration) below, so duplicating fields from it here would rest on a sync path that doesn't otherwise exist yet.
+
+---
+
+## Saga Pattern: Cancel-Event Orchestration
+
+Cancelling an event triggers two independent side effects in Ticketing — refund every payment, archive every ticket — and neither one knows about the other. Something has to wait for **both** to finish, in whatever order they happen to complete, before the cancellation can be considered done. That coordinator is a saga: process state keyed by `event_id`, living outside any single request or message, that survives a crash mid-flight.
+
+The C# reference implements this with MassTransit's `MassTransitStateMachine`, persisted in Redis. This port keeps the same observable behavior — start, wait for both branches, complete — as a much smaller mechanism: a single Postgres table plus an atomic bitmask join, since a full state-machine DSL would be overkill for one saga with two parallel steps.
+
+```
+events.Event.Cancel()                                     (Events, HTTP request)
+        │  same transaction
+        ▼
+events.outbox_messages row (EventCancelledDomainEvent)
+        │
+        ▼  outbox.Worker ticks
+Idempotent("EventCancelledHandler") → publishes EventCanceledIntegrationEvent   ← events/api/
+        │
+        ▼  EventBus.Publish is synchronous — the rest of this chain runs inline
+Idempotent("CancelEventSagaStartedHandler")
+        │  INSERT events.cancel_event_saga_state (event_id)
+        │  publishes
+        ▼
+EventBus.Publish(EventCancellationStartedIntegrationEvent)
+        │
+        ▼
+Idempotent("EventCancellationStartedConsumer")             (ticketing/internal/app/consumers/)
+        │  calls CancelEventCommand → ticketing's own Event.Cancel()
+        ▼
+ticketing.outbox_messages row (EventCancelledDomainEvent, ticketing's own copy)
+        │
+        ▼  outbox.Worker ticks (ticketing)
+ArchiveTicketsHandler + RefundPaymentsHandler run, each raising its own completion event
+        │
+        ▼
+ticketing.outbox_messages rows (EventTicketsArchivedDomainEvent, EventPaymentsRefundedDomainEvent)
+        │
+        ▼  outbox.Worker ticks again
+TicketsArchivedIntegrationEventPublisher / PaymentsRefundedIntegrationEventPublisher
+        │  publish
+        ▼
+EventBus.Publish(EventTicketsArchivedIntegrationEvent / EventPaymentsRefundedIntegrationEvent)  ← ticketing/api/
+        │
+        ▼
+Idempotent("CancelEventSagaTicketsArchivedHandler" / "...PaymentsRefundedHandler")
+        │  UPDATE events.cancel_event_saga_state SET completed_steps = completed_steps | $step
+        │  RETURNING completed_steps        (atomic — safe under redelivery or either arrival order)
+        ▼
+completed_steps == AllSteps? → publish EventCancellationCompletedIntegrationEvent, delete the row
+```
+
+The saga lives in `modules/events/internal/app/sagas/event_cancellation/` — three handlers (`StartedHandler`, `PaymentsRefundedHandler`, `TicketsArchivedHandler`), each a plain consumer wired the same way as any other `eventbus.Subscribe` + `inbox.Idempotent` pair. There's nothing framework-specific about it: `CancelEventSagaRepository` is just another `ports/outbound` interface, and the "state machine" is two bits in a `SMALLINT` column. Because Events subscribes to Ticketing's integration events and Ticketing subscribes to Events' — the first bidirectional cross-module dependency in this codebase — `TestModuleIsolation_NoModuleDependsOnAnotherModule` was checked explicitly to confirm both directions are still only through `api/integrationevents`, which the architecture test allows regardless of direction.
 
 ---
 
@@ -305,6 +382,8 @@ Each module owns its own PostgreSQL schema. Cross-schema queries are prohibited.
 | `events.ticket_types` | Ticket types belonging to an event |
 | `events.outbox_messages` | Pending/processed domain events — see [Reliable messaging](#reliable-messaging-outbox-idempotent-consumer--inbox) |
 | `events.outbox_message_consumers` | Per-handler idempotency tracking for the rows above |
+| `events.inbox_message_consumers` | Per-consumer idempotency tracking for integration events received from other modules |
+| `events.cancel_event_saga_state` | Cancel-event saga correlation state — one row per in-flight cancellation, bitmask of which parallel steps (refund, archive) have completed — see [Saga Pattern](#saga-pattern-cancel-event-orchestration) |
 
 ### Schema: `users`
 
@@ -327,8 +406,9 @@ Each module owns its own PostgreSQL schema. Cross-schema queries are prohibited.
 | `ticketing.ticket_types` | TicketType replica with available quantity tracking |
 | `ticketing.orders` | Purchase orders |
 | `ticketing.order_items` | Line items per order |
-| `ticketing.tickets` | Issued tickets (one per order item unit) |
+| `ticketing.tickets` | Issued tickets (one per order item unit); check-in state tracked via `used_at_utc` |
 | `ticketing.payments` | Payments linked to orders |
+| `ticketing.event_statistics` | Materialized view of per-event ticket/check-in counts — see [Materialized View](#materialized-view-event-statistics) |
 | `ticketing.outbox_messages` | Pending/processed domain events — see [Reliable messaging](#reliable-messaging-outbox-idempotent-consumer--inbox) |
 | `ticketing.outbox_message_consumers` | Per-handler idempotency tracking for the rows above |
 | `ticketing.inbox_message_consumers` | Per-consumer idempotency tracking for integration events received from other modules |
@@ -453,7 +533,7 @@ Response `204`
 | `GET` | `/events/search` | 🔒 | `events:search` | Search events |
 | `GET` | `/events/{id}` | 🔒 | `events:read` | Get event by ID (includes ticket types) |
 | `POST` | `/events/{id}/publish` | 🔒 | `events:update` | Publish an event |
-| `POST` | `/events/{id}/cancel` | 🔒 | `events:update` | Cancel an event |
+| `POST` | `/events/{id}/cancel` | 🔒 | `events:update` | Cancel an event — triggers the [cancel-event saga](#saga-pattern-cancel-event-orchestration) |
 | `PUT` | `/events/{id}/reschedule` | 🔒 | `events:update` | Reschedule an event |
 
 #### `POST /events`
@@ -574,7 +654,48 @@ Response `201`: `{ "id": "uuid" }`
 
 Availability is validated and decremented atomically under a row lock (`SELECT ... FOR UPDATE`) as part of order creation — a ticket type selling out here raises `TicketTypeSoldOutDomainEvent`. Ticket issuance itself is **not** part of this request: `OrderCreatedDomainEvent` is recorded in the outbox in the same transaction as the order, and a background worker later creates one `Ticket` per unit of quantity ordered and marks the order as fulfilled. Poll `GET /orders/{id}` (not yet implemented) or the eventual order-confirmation flow to observe completion.
 
-> **Known gap:** cancelling an event is meant to trigger archiving its tickets and refunding its payments (`ArchiveTicketsHandler`, `RefundPaymentsHandler` — both implemented and registered) but there is currently no reachable path that calls `Event.Cancel()` in the Ticketing module; that requires an Events → Ticketing integration-event consumer that doesn't exist yet. Payment refunds call a `PaymentGateway` port backed by an in-memory fake — no real payment processor is integrated.
+> Cancelling an event (`POST /events/{id}/cancel`) archives its tickets and refunds its payments in Ticketing automatically, end to end, coordinated by the [cancel-event saga](#saga-pattern-cancel-event-orchestration) — no direct call between the two modules. Payment refunds call a `PaymentGateway` port backed by an in-memory fake — no real payment processor is integrated.
+
+---
+
+### Tickets
+
+| Method | Path | Auth | Permission | Description |
+|--------|------|------|------------|-------------|
+| `POST` | `/tickets/{id}/check-in` | 🔒 | `tickets:check-in`* | Check a ticket in |
+
+#### `POST /tickets/{id}/check-in`
+```json
+{ "customer_id": "uuid" }
+```
+Response `204` on success.
+
+`customer_id` must match the ticket's owner. `Ticket.CheckIn` (see [Materialized View](#materialized-view-event-statistics)) raises a domain event on every outcome, including failures, so both of these surface as ordinary Problem Details responses and are still counted in `event_statistics`:
+- `409 ticket.already_checked_in` — the ticket was already used.
+- `400 ticket.check_in_invalid` — `customer_id` does not own this ticket.
+
+---
+
+### Event Statistics
+
+| Method | Path | Auth | Permission | Description |
+|--------|------|------|------------|-------------|
+| `GET` | `/events/{id}/statistics` | 🔒 | `event-statistics:read`* | Read an event's materialized ticket/check-in counters |
+
+#### `GET /events/{id}/statistics`
+Response `200`:
+```json
+{
+  "event_id": "uuid",
+  "tickets_sold": 42,
+  "attendees_checked_in": 30,
+  "duplicate_check_in_tickets": ["tc_..."],
+  "invalid_check_in_tickets": ["tc_..."]
+}
+```
+Response `404` if no ticket has ever been sold for the event (the row is created lazily on first sale — see [Materialized View](#materialized-view-event-statistics)).
+
+> \* **Known gap:** `tickets:check-in` and `event-statistics:read` exist as seeded permission codes (`users.permissions`, granted to `Member`/`Administrator`), but neither Ticketing route above is actually wrapped in `middleware.RequirePermission` yet — a valid Bearer token is enough today. Wire it the same way `middleware.RequirePermission(domain.PermEventsRead)` gates Events routes.
 
 ---
 
