@@ -22,6 +22,7 @@ import (
 	createcustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_customer"
 	createevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_event"
 	createorder "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_order"
+	createtickettype "github.com/llannillo/mm/modules/ticketing/internal/app/commands/create_ticket_type"
 	rescheduleevent "github.com/llannillo/mm/modules/ticketing/internal/app/commands/reschedule_event"
 	updatecustomer "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_customer"
 	updatetickettypeprice "github.com/llannillo/mm/modules/ticketing/internal/app/commands/update_ticket_type_price"
@@ -168,11 +169,29 @@ func New(app shared.App) *Module {
 		consumers.NewEventCancellationStartedConsumer(cancelEventHandler).Handle,
 	))
 
-	// Replica-sync commands — see the registry comment above for why these
-	// stay unwired until the EDA phase.
-	_ = createevent.NewHandler(eventRepo, ticketTypeRepo)
-	_ = rescheduleevent.NewHandler(eventRepo)
-	_ = updatetickettypeprice.NewHandler(ticketTypeRepo)
+	// Replica-sync consumers — keep this module's local Event/TicketType
+	// copies in step with the events module via its public integration events.
+	createEventHandler := createevent.NewHandler(eventRepo)
+	createTicketTypeHandler := createtickettype.NewHandler(ticketTypeRepo)
+	rescheduleEventHandler := rescheduleevent.NewHandler(eventRepo)
+	updateTicketTypePriceHandler := updatetickettypeprice.NewHandler(ticketTypeRepo)
+
+	eventbus.Subscribe[eventsintegrationevents.EventCreatedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"EventCreatedConsumer", app.DB, schema,
+		consumers.NewEventCreatedConsumer(createEventHandler).Handle,
+	))
+	eventbus.Subscribe[eventsintegrationevents.TicketTypeCreatedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"TicketTypeCreatedConsumer", app.DB, schema,
+		consumers.NewTicketTypeCreatedConsumer(createTicketTypeHandler).Handle,
+	))
+	eventbus.Subscribe[eventsintegrationevents.EventRescheduledIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"EventRescheduledConsumer", app.DB, schema,
+		consumers.NewEventRescheduledConsumer(rescheduleEventHandler).Handle,
+	))
+	eventbus.Subscribe[eventsintegrationevents.TicketTypePriceChangedIntegrationEvent](app.EventBus, inbox.Idempotent(
+		"TicketTypePriceChangedConsumer", app.DB, schema,
+		consumers.NewTicketTypePriceChangedConsumer(updateTicketTypePriceHandler).Handle,
+	))
 
 	carts := &cartServiceImpl{
 		log:           app.Logger,

@@ -4,7 +4,54 @@
 // modules/events/api's synchronous EventsAPI interface.
 package integrationevents
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// EventCreatedIntegrationEvent is published when a new event is created.
+// It is the public cross-module contract for the events module.
+type EventCreatedIntegrationEvent struct {
+	EventID     uuid.UUID
+	CategoryID  uuid.UUID
+	Title       string
+	Description *string
+	Location    *string
+	StartsAtUtc time.Time
+	EndsAtUtc   *time.Time
+}
+
+func (EventCreatedIntegrationEvent) IsIntegrationEvent() {}
+
+// EventRescheduledIntegrationEvent is published when an event's schedule changes.
+type EventRescheduledIntegrationEvent struct {
+	EventID     uuid.UUID
+	StartsAtUtc time.Time
+	EndsAtUtc   *time.Time
+}
+
+func (EventRescheduledIntegrationEvent) IsIntegrationEvent() {}
+
+// TicketTypeCreatedIntegrationEvent is published when a new ticket type is created.
+type TicketTypeCreatedIntegrationEvent struct {
+	TicketTypeID uuid.UUID
+	EventID      uuid.UUID
+	Name         string
+	Price        int64
+	Currency     string
+	Quantity     int64
+}
+
+func (TicketTypeCreatedIntegrationEvent) IsIntegrationEvent() {}
+
+// TicketTypePriceChangedIntegrationEvent is published when a ticket type's price changes.
+type TicketTypePriceChangedIntegrationEvent struct {
+	TicketTypeID uuid.UUID
+	Price        int64
+}
+
+func (TicketTypePriceChangedIntegrationEvent) IsIntegrationEvent() {}
 
 // EventCanceledIntegrationEvent is published when an event is cancelled.
 // It is the public cross-module contract for the events module.

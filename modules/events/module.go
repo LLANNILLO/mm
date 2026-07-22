@@ -53,15 +53,6 @@ func New(app shared.App) *Module {
 	queries := pgstore.New(app.DB)
 	clock := domain.UTCClock{}
 
-	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
-		"HandleEventRescheduled", app.DB, schema,
-		eventhandlers.HandleEventRescheduled,
-	))
-	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
-		"EventCancelledHandler", app.DB, schema,
-		eventhandlers.NewEventCancelledHandler(app.EventBus).Handle,
-	))
-
 	registry := outbox.NewTypeRegistry()
 	outbox.RegisterType[domain.EventCreatedDomainEvent](registry)
 	outbox.RegisterType[domain.EventPublishedDomainEvent](registry)
@@ -91,6 +82,30 @@ func New(app shared.App) *Module {
 	categoryReader := pg.NewCategoryReader(queries)
 	ticketTypeReader := pg.NewTicketTypeReader(queries)
 
+	getEventHandler := getevent.NewHandler(eventReader)
+	getTicketTypeHandler := gettickettype.NewHandler(ticketTypeReader)
+
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"EventCreatedHandler", app.DB, schema,
+		eventhandlers.NewEventCreatedHandler(getEventHandler, app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"EventRescheduledHandler", app.DB, schema,
+		eventhandlers.NewEventRescheduledHandler(app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"EventCancelledHandler", app.DB, schema,
+		eventhandlers.NewEventCancelledHandler(app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketTypeCreatedHandler", app.DB, schema,
+		eventhandlers.NewTicketTypeCreatedHandler(getTicketTypeHandler, app.EventBus).Handle,
+	))
+	sharedevents.Register(app.Dispatcher, outbox.Idempotent(
+		"TicketTypePriceChangedHandler", app.DB, schema,
+		eventhandlers.NewTicketTypePriceChangedHandler(app.EventBus).Handle,
+	))
+
 	sagaRepo := pg.NewCancelEventSagaRepository(queries)
 
 	eventbus.Subscribe[integrationevents.EventCanceledIntegrationEvent](app.EventBus, inbox.Idempotent(
@@ -112,7 +127,7 @@ func New(app shared.App) *Module {
 		publishEvent:    publishevent.NewHandler(eventRepo, ticketTypeRepo),
 		cancelEvent:     cancelevent.NewHandler(eventRepo, clock),
 		rescheduleEvent: rescheduleevent.NewHandler(eventRepo),
-		getEvent:        getevent.NewHandler(eventReader),
+		getEvent:        getEventHandler,
 		listEvents:      listevents.NewHandler(eventReader),
 		searchEvents:    searchevents.NewHandler(eventReader),
 	}
@@ -125,8 +140,6 @@ func New(app shared.App) *Module {
 		getCategory:     getcategory.NewHandler(categoryReader),
 		listCategories:  listcategories.NewHandler(categoryReader),
 	}
-
-	getTicketTypeHandler := gettickettype.NewHandler(ticketTypeReader)
 
 	tickets := &ticketService{
 		log:               app.Logger,
