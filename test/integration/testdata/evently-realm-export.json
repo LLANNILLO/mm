@@ -1,0 +1,40 @@
+{
+  "realm": "evently",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "evently-public-client",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["*"]
+    },
+    {
+      "clientId": "evently-confidential-client",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "secret": "test-confidential-secret",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "redirectUris": []
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-evently-confidential-client",
+      "enabled": true,
+      "serviceAccountClientId": "evently-confidential-client",
+      "realmRoles": ["default-roles-evently"],
+      "clientRoles": {
+        "realm-management": ["manage-users"]
+      }
+    }
+  ]
+}

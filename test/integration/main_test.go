@@ -1,12 +1,8 @@
 // Package integration boots the real application — real Postgres, real
-// Valkey, wired through internal/bootstrap the same way cmd/api does — behind
-// an httptest.Server, and drives it over HTTP. Containers are started once in
-// TestMain and shared across every test in the package.
-//
-// Keycloak is intentionally not wired up yet: cfg.Authentication.IssuerURL is
-// left empty, so bootstrap.Build skips the OIDC verifier and no auth
-// middleware is applied. Endpoints that require a real access token stay out
-// of scope until the Keycloak container is added.
+// Valkey, real Keycloak, wired through internal/bootstrap the same way
+// cmd/api does — behind an httptest.Server, and drives it over HTTP.
+// Containers are started once in TestMain and shared across every test in
+// the package.
 package integration
 
 import (
@@ -28,8 +24,9 @@ import (
 )
 
 var (
-	baseURL    string
-	httpClient = &http.Client{Timeout: 10 * time.Second}
+	baseURL          string
+	keycloakTokenURL string
+	httpClient       = &http.Client{Timeout: 10 * time.Second}
 )
 
 func TestMain(m *testing.M) {
@@ -88,13 +85,32 @@ func run(m *testing.M) int {
 		return 1
 	}
 
+	kc, err := startKeycloak(ctx)
+	if err != nil {
+		log.Printf("start keycloak container: %v", err)
+		return 1
+	}
+	defer kc.Terminate(ctx) //nolint:errcheck
+
 	cfg := &shared.Config{
-		Database:  shared.DatabaseConfig{DSN: dsn},
-		Logging:   shared.LoggingConfig{Level: "error"},
-		Cache:     shared.CacheConfig{Address: fmt.Sprintf("%s:%s", redisHost, redisPort.Port())},
+		Database: shared.DatabaseConfig{DSN: dsn},
+		Logging:  shared.LoggingConfig{Level: "error"},
+		Cache:    shared.CacheConfig{Address: fmt.Sprintf("%s:%s", redisHost, redisPort.Port())},
+		Authentication: shared.AuthenticationConfig{
+			IssuerURL: kc.issuerURL,
+			Audience:  "account",
+		},
 		Events:    shared.EventsConfig{Outbox: shared.OutboxConfig{IntervalSeconds: 1, BatchSize: 10}},
 		Ticketing: shared.TicketingConfig{Outbox: shared.OutboxConfig{IntervalSeconds: 1, BatchSize: 10}},
-		Users:     shared.UsersConfig{Outbox: shared.OutboxConfig{IntervalSeconds: 1, BatchSize: 10}},
+		Users: shared.UsersConfig{
+			Outbox: shared.OutboxConfig{IntervalSeconds: 1, BatchSize: 10},
+			Keycloak: shared.KeycloakConfig{
+				AdminURL:                 kc.adminURL,
+				TokenURL:                 kc.tokenURL,
+				ConfidentialClientID:     keycloakConfidentialClientID,
+				ConfidentialClientSecret: keycloakConfidentialClientSecret,
+			},
+		},
 	}
 
 	logger := shared.NewLogger("test", cfg.Logging)
@@ -110,6 +126,7 @@ func run(m *testing.M) int {
 	defer server.Close()
 
 	baseURL = server.URL
+	keycloakTokenURL = kc.tokenURL
 
 	return m.Run()
 }
