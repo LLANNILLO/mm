@@ -93,6 +93,8 @@ Modules communicate through two mechanisms, both defined in `modules/<module>/ap
 
 **Asynchronous (event bus):** A module publishes Integration Events to a shared in-memory `EventBus`. Other modules subscribe consumers at startup. Integration event types live in their own `api/integrationevents/` package — kept separate from `api/api.go` specifically so the architecture tests can allow-list "depend on the async contract" while still forbidding "depend on the sync interface" at the package level.
 
+Events publishes six integration events today: `EventCreatedIntegrationEvent`, `EventRescheduledIntegrationEvent`, `EventCanceledIntegrationEvent`, `EventCancellationStartedIntegrationEvent`, `EventCancellationCompletedIntegrationEvent`, `TicketTypeCreatedIntegrationEvent`, and `TicketTypePriceChangedIntegrationEvent`. Ticketing consumes the creation/reschedule/price ones to keep its own `Event`/`TicketType` replica tables in sync — see [Database](#database) — and the cancellation ones as part of the [cancel-event saga](#saga-pattern-cancel-event-orchestration). Users publishes `UserRegisteredIntegrationEvent` and `UserProfileUpdatedIntegrationEvent`, consumed by Ticketing to keep its `Customer` replica in sync.
+
 **Enforced by tests:** `TestModuleIsolation_NoModuleDependsOnAnotherModule` (in `test/architecture/`) fails the build if any module imports another module's `internal/` packages or its `api` package directly — the only cross-module import allowed is `api/integrationevents`.
 
 The full path from a domain event to a cross-module side effect is asynchronous end to end — nothing in this chain runs inside the original HTTP request:
@@ -134,9 +136,29 @@ The `EventBus` lives in `internal/shared/eventbus/`. It is in-memory today — s
 
 ---
 
-## Architecture tests
+## Testing
 
-`test/architecture/` is the Go port of the C# course's `Evently.ArchitectureTests` (NetArchTest). Go has no runtime IL to reflect over, so the suite is built on `go/packages` + `go/types` instead — it parses and type-checks every package in the module and inspects the resulting import graph and type declarations statically. Run it like any other test:
+Four tiers, from fastest/most isolated to slowest/most end-to-end. `task lint`/`task test`/`task test:integration` (see [Taskfile.yml](Taskfile.yml)) are the source of truth for how each tier actually runs — CI calls the exact same tasks, so "works on my machine" and "works in CI" can't drift apart.
+
+| Tier | Location | Needs Docker? | Command |
+|---|---|---|---|
+| Unit | `modules/*/internal/domain/*_test.go` | No | `go test ./modules/... -race -cover` |
+| Architecture | `test/architecture/` | No | `go test ./test/architecture/...` |
+| Integration | `test/integration/` | Yes (Postgres, Valkey, Keycloak) | `go test ./test/integration/... -timeout 5m` |
+| System integration | `test/integration/system_flows_test.go` | Yes (same harness) | included in the command above |
+
+### Unit tests
+
+White-box, colocated with the code they test (`package domain`, not `domain_test`) — Go convention, and it lets tests reach unexported fields when useful. Every aggregate (`Event`, `Category`, `TicketType`, `Order`, `Payment`, `Ticket`, `Customer`, `User`, ...) has a `<type>_test.go` covering its invariants and the domain events it raises, using a small generic helper (`assertDomainEventPublished[T]` / `assertNoDomainEventPublished[T]`, one per module's `domain_test_helpers_test.go`) instead of hand-rolling event assertions per test. `testify/assert` + `testify/require` for assertions; table-driven tests for pure validation logic. No Bogus-style fake-data library — the domain types here don't need one.
+
+```bash
+go test ./modules/... -v          # verbose, see every test name
+go test ./modules/... -cover      # coverage per package
+```
+
+### Architecture tests
+
+`test/architecture/` is the Go port of the C# course's `Evently.ArchitectureTests` + `Evently.IntegrationTests`' `ModuleTests.cs` combined (this project has no MSBuild-style per-module test assemblies, so there's no need to split them the way C# does). Go has no runtime IL to reflect over, so the suite is built on `go/packages` + `go/types` instead — it parses and type-checks every package in the module and inspects the resulting import graph and type declarations statically.
 
 ```bash
 go test ./test/architecture/...
@@ -146,13 +168,56 @@ What it enforces, one file per concern:
 
 | File | Enforces |
 |---|---|
-| `module_isolation_test.go` | A module may depend on another module's `api/integrationevents` package only — never its `internal/` packages, never its synchronous `api` package. |
+| `module_isolation_test.go` | A module may depend on another module's `api/integrationevents` package only — never its `internal/` packages, never its synchronous `api` package. Checked in both directions for Events ↔ Ticketing, the one bidirectional dependency in this codebase (see [Saga Pattern](#saga-pattern-cancel-event-orchestration)). |
 | `layers_test.go` | Hexagonal dependency direction within a module: `domain` has zero internal dependencies; `app` depends on `domain`/`ports` but never `adapters`; `adapters/driving` and `adapters/driven` never depend on each other. A second check denies importing concrete infra packages (`pgx`, `pgxpool`, `database/sql`, `valkey-go`) straight from `app`/`domain`, since a local-path check alone can't see a leak coming through a third-party driver. |
 | `domain_test.go` | Every entity has zero exported fields plus an exported `New<Type>`/`Rehydrate<Type>` pair; every type implementing `events.DomainEvent` is named `*DomainEvent`. |
 | `application_test.go` | Every `commands/*`/`queries/*` package exposes `Command`/`Query` + `Handler` + `NewHandler`; `Handler` has no exported fields; any `Validate` method is exactly `func() error`. |
 | `presentation_test.go` | Any type that subscribes to the event bus (has a `Handle` method, lives in an `app/consumers` package) is named `*Consumer`. |
 
 Some C# NetArchTest rules have no Go equivalent and are intentionally not ported: "sealed" doesn't exist because Go structs cannot be subclassed at all, and Go's own `internal/` visibility rule already makes cross-module internal imports a compile error — the test suite only needs to guard what the compiler *can't* see (the public `api` surface, and layer leaks through third-party packages).
+
+### Integration tests
+
+`test/integration/` boots the **real** application — real Postgres, real Valkey, real Keycloak — behind an `httptest.Server`, and drives it purely over HTTP (no direct handler access, unlike C#'s MediatR `ISender`: this module's services aren't exposed outside their own package, so HTTP is the only seam available, which also means these tests exercise routing and auth middleware for free). `TestMain` starts all three containers once and shares them across every test in the package.
+
+There is no official `testcontainers-go` module for Keycloak (unlike Postgres/Redis, which do have one) — it's assembled by hand in `keycloak.go` from a generic image, using `testdata/evently-realm-export.json` as a minimal realm fixture (two clients: a public one for password-grant tokens, a confidential one whose service account has the `realm-management` `manage-users` role, so it can call the Admin API the same way `modules/users/internal/adapters/driven/keycloak` does in production).
+
+```bash
+go test ./test/integration/... -v -timeout 5m
+```
+
+Requires Docker running locally. First run pulls three images (`postgres:18-alpine`, `valkey/valkey:9-alpine`, `quay.io/keycloak/keycloak:latest`) — expect ~25-40s; subsequent runs are faster once images are cached.
+
+### System integration tests
+
+`system_flows_test.go`, in the same package/harness as the integration tests above — Go equivalent of the C# course's top-level `Evently.IntegrationTests` (as opposed to the per-module `Users.IntegrationTests`): flows that cross module boundaries through the real outbox → event bus → inbox pipeline, not just one module in isolation.
+
+`poller_test.go` is the Go port of C#'s `Poller.WaitAsync<T>`: cross-module propagation is eventually consistent (an outbox worker has to tick before the effect is visible elsewhere), so these tests retry an assertion every 500ms until it passes or a timeout is hit, instead of asserting once right after the triggering call.
+
+`TestSystemFlow_UserCanAddItemToCartAfterRegistrationAndEventCreation` proves both propagation paths that exist today — Users → Ticketing (`Customer`) and Events → Ticketing (`Event`/`TicketType`) — through the only endpoint that observably depends on both: there's no dedicated "does this customer exist yet" read endpoint to poll individually, so a successful `PUT /carts/add` is the signal that both landed.
+
+---
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request. Four jobs, all calling the same `task` targets described in [Testing](#testing) above — nothing CI-only, nothing that can pass locally and fail in CI (or the reverse) because the commands differ:
+
+```
+lint ──┐
+       ├──► integration ──► build
+unit ──┘
+```
+
+| Job | Runs | Needs |
+|---|---|---|
+| `lint` | `task lint` (`go vet` + `gofmt -l`) | — |
+| `unit` | `task test` (unit + architecture tests) | — |
+| `integration` | `task test:integration` (real Postgres/Valkey/Keycloak via testcontainers) | `lint`, `unit` — no point paying for three containers if a cheap check already failed |
+| `build` | `task build` (binary) + `docker build --target builder` (image) | `unit`, `integration` |
+
+`lint` and `unit` run in parallel — both are fast and don't depend on each other. `ubuntu-latest` GitHub-hosted runners ship a running Docker daemon, so `testcontainers-go` works with no `services:` block or Docker-in-Docker setup, exactly like running the integration suite locally.
+
+Deliberately out of scope: no `golangci-lint` (no existing config in this repo, and introducing one with default rules would produce a wall of first-run warnings unrelated to any actual change — `go vet` + `gofmt` were already clean), and no deploy/registry-push step (this pipeline proves the code is correct and buildable; it doesn't publish anywhere).
 
 ---
 
@@ -244,7 +309,7 @@ ticketing.event_statistics (event_id, tickets_sold, attendees_checked_in,
 GET /events/{id}/statistics → GetEventStatisticsByEventID (sqlc, no joins)
 ```
 
-`Ticket.CheckIn(customerID)` (`modules/ticketing/internal/domain/ticket.go`) is the one domain method worth calling out here: unlike `Archive()`, it raises a domain event on **every** outcome, including the two failure paths (wrong customer, already used) — the whole point of this view is counting failed attempts too, not just successes. `event_statistics` deliberately stores counts only, not the event's title/location the C# reference denormalizes alongside them: `ticketing.events` is itself an unwired replica outside of the [cancel-event flow](#saga-pattern-cancel-event-orchestration) below, so duplicating fields from it here would rest on a sync path that doesn't otherwise exist yet.
+`Ticket.CheckIn(customerID)` (`modules/ticketing/internal/domain/ticket.go`) is the one domain method worth calling out here: unlike `Archive()`, it raises a domain event on **every** outcome, including the two failure paths (wrong customer, already used) — the whole point of this view is counting failed attempts too, not just successes. `event_statistics` deliberately stores counts only, not the event's title/location: even though `ticketing.events` is now kept in sync (see [Inter-module communication](#inter-module-communication)), denormalizing those fields into every statistics row would mean re-syncing them on every rename, which isn't worth it for a read model that's only ever queried by `event_id`.
 
 ---
 
@@ -367,6 +432,8 @@ mux.Handle("GET /events", middleware.RequirePermission(domain.PermEventsRead)(ha
 
 `RequirePermission` checks `claims.Permissions` in the context and returns `403 Forbidden` if the permission is absent.
 
+> **Known gap — enforcement is not wired yet.** `middleware.RequirePermission` exists and is unit-testable in isolation, but no route in any module is actually wrapped with it today — `rg "RequirePermission" -g "*.go"` outside the middleware package itself returns nothing. In practice, **every** endpoint (except `POST /users/register` and `GET /health`) only checks for a valid Bearer token; a `Member` can call any route a permission table below marks as needing a higher permission, and will get a normal `2xx` response instead of `403`. The "Permission" column in [Endpoints](#endpoints) documents the *intended* gate, computed and available in `claims.Permissions` on every request — it's just not enforced at the route level yet. Wire it the same way the snippet above shows, one route at a time.
+
 ---
 
 ## Database
@@ -472,6 +539,7 @@ curl -s -X POST http://localhost:18080/realms/evently/protocol/openid-connect/to
 ## Endpoints
 
 > **All endpoints except `POST /users/register` and `GET /health` require `Authorization: Bearer <token>`.**
+> The "Permission" column below is the *intended* gate — see the [known gap](#authorization-rbac): it's not enforced by any route yet, so any authenticated user can currently call any endpoint.
 
 ### Health
 
@@ -502,7 +570,7 @@ Response `201`: `{ "id": "uuid" }`
 
 Registers the user in Keycloak and in the local DB. The new user is assigned the `Member` role automatically.
 
-#### `GET /users/{id}/profile`
+#### `GET /users/me/profile`
 Response `200`:
 ```json
 {
@@ -513,7 +581,7 @@ Response `200`:
 }
 ```
 
-#### `PUT /users/{id}/profile`
+#### `PUT /users/me/profile`
 ```json
 {
   "first_name": "string",
@@ -662,7 +730,7 @@ Availability is validated and decremented atomically under a row lock (`SELECT .
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `POST` | `/tickets/{id}/check-in` | 🔒 | `tickets:check-in`* | Check a ticket in |
+| `POST` | `/tickets/{id}/check-in` | 🔒 | `tickets:check-in` | Check a ticket in |
 
 #### `POST /tickets/{id}/check-in`
 ```json
@@ -680,7 +748,7 @@ Response `204` on success.
 
 | Method | Path | Auth | Permission | Description |
 |--------|------|------|------------|-------------|
-| `GET` | `/events/{id}/statistics` | 🔒 | `event-statistics:read`* | Read an event's materialized ticket/check-in counters |
+| `GET` | `/events/{id}/statistics` | 🔒 | `event-statistics:read` | Read an event's materialized ticket/check-in counters |
 
 #### `GET /events/{id}/statistics`
 Response `200`:
@@ -694,8 +762,6 @@ Response `200`:
 }
 ```
 Response `404` if no ticket has ever been sold for the event (the row is created lazily on first sale — see [Materialized View](#materialized-view-event-statistics)).
-
-> \* **Known gap:** `tickets:check-in` and `event-statistics:read` exist as seeded permission codes (`users.permissions`, granted to `Member`/`Administrator`), but neither Ticketing route above is actually wrapped in `middleware.RequirePermission` yet — a valid Bearer token is enough today. Wire it the same way `middleware.RequirePermission(domain.PermEventsRead)` gates Events routes.
 
 ---
 
