@@ -122,6 +122,10 @@ func run(m *testing.M) int {
 	}
 	defer app.Close()
 
+	outboxCtx, cancelOutbox := context.WithCancel(ctx)
+	defer cancelOutbox()
+	app.RunOutbox(outboxCtx)
+
 	server := httptest.NewServer(app.Handler)
 	defer server.Close()
 
