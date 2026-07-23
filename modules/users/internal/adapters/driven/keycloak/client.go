@@ -14,9 +14,9 @@ import (
 )
 
 type Config struct {
-	AdminURL             string `mapstructure:"admin_url"`
-	TokenURL             string `mapstructure:"token_url"`
-	ConfidentialClientID string `mapstructure:"confidential_client_id"`
+	AdminURL                 string `mapstructure:"admin_url"`
+	TokenURL                 string `mapstructure:"token_url"`
+	ConfidentialClientID     string `mapstructure:"confidential_client_id"`
 	ConfidentialClientSecret string `mapstructure:"confidential_client_secret"`
 }
 
@@ -122,12 +122,12 @@ func extractIdentityID(resp *http.Response) (string, error) {
 }
 
 type userRepresentation struct {
-	Username      string                    `json:"username"`
-	Email         string                    `json:"email"`
-	FirstName     string                    `json:"firstName"`
-	LastName      string                    `json:"lastName"`
-	EmailVerified bool                      `json:"emailVerified"`
-	Enabled       bool                      `json:"enabled"`
+	Username      string                     `json:"username"`
+	Email         string                     `json:"email"`
+	FirstName     string                     `json:"firstName"`
+	LastName      string                     `json:"lastName"`
+	EmailVerified bool                       `json:"emailVerified"`
+	Enabled       bool                       `json:"enabled"`
 	Credentials   []credentialRepresentation `json:"credentials"`
 }
 

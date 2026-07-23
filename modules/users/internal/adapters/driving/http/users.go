@@ -5,8 +5,8 @@ import (
 
 	"github.com/llannillo/mm/internal/shared/auth"
 	registeruser "github.com/llannillo/mm/modules/users/internal/app/commands/register_user"
-	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	updateuser "github.com/llannillo/mm/modules/users/internal/app/commands/update_user"
+	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 )
 
 func (h *Handler) registerUser(w http.ResponseWriter, r *http.Request) {

@@ -7,10 +7,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	getcategory "github.com/llannillo/mm/modules/events/internal/app/queries/get_category"
 	listcategories "github.com/llannillo/mm/modules/events/internal/app/queries/list_categories"
 	"github.com/llannillo/mm/modules/events/internal/domain"
-	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 )
 
 type CategoryReader struct {

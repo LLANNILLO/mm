@@ -93,6 +93,34 @@ tasks:
     dir: "{{.TICKETING_SQLC}}"
     cmd: sqlc generate
 
+  # ── Lint & Test ─────────────────────────────────────────────────────────────
+
+  lint:
+    desc: Run go vet and check gofmt
+    cmds:
+      - go vet ./...
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "$unformatted"
+          echo "run 'gofmt -w .' to fix"
+          exit 1
+        fi
+
+  test:
+    desc: Run unit and architecture tests (fast, no Docker required)
+    cmd: go test ./modules/... ./test/architecture/... -race -cover
+
+  test:integration:
+    desc: Run integration tests against real Postgres/Valkey/Keycloak (requires Docker)
+    cmd: go test ./test/integration/... -timeout 5m
+
+  test:all:
+    desc: Run the full test suite (unit, architecture, integration)
+    cmds:
+      - task: test
+      - task: test:integration
+
   # ── Build / Dev ─────────────────────────────────────────────────────────────
 
   build:

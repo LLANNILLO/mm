@@ -16,8 +16,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/llannillo/mm/internal/shared/events"
 	"github.com/llannillo/mm/internal/shared/eventbus"
+	"github.com/llannillo/mm/internal/shared/events"
 )
 
 // Idempotent decorates an integration-event consumer so it runs at most once

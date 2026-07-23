@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	registeruser "github.com/llannillo/mm/modules/users/internal/app/commands/register_user"
 	updateuser "github.com/llannillo/mm/modules/users/internal/app/commands/update_user"
+	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 )
 
 type UserService interface {

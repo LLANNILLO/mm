@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/lmittmann/tint"
 	"github.com/llannillo/mm/internal/shared/seq"
+	"github.com/lmittmann/tint"
 )
 
 func NewLogger(env string, cfg LoggingConfig) *slog.Logger {

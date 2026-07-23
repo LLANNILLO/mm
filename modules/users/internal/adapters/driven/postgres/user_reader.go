@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	store "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
 	getuser "github.com/llannillo/mm/modules/users/internal/app/queries/get_user"
 	"github.com/llannillo/mm/modules/users/internal/domain"
-	store "github.com/llannillo/mm/modules/users/internal/adapters/driven/postgres/generated"
 )
 
 type UserReader struct {

@@ -7,10 +7,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 	gettickettype "github.com/llannillo/mm/modules/events/internal/app/queries/get_ticket_type"
 	listtickettype "github.com/llannillo/mm/modules/events/internal/app/queries/list_ticket_types"
 	"github.com/llannillo/mm/modules/events/internal/domain"
-	store "github.com/llannillo/mm/modules/events/internal/adapters/driven/postgres/generated"
 )
 
 type TicketTypeReader struct {
